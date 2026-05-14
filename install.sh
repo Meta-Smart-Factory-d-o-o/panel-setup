@@ -63,15 +63,15 @@ Required:
   --workstation-id <id>     Unique workstation ID
   --panel-id <id>           Unique panel ID
   --mysql-db <name>         MySQL database name
-  --mysql-password <pwd>    MySQL password
-  --rabbit-password <pwd>   RabbitMQ password
+  --mysql-password <pwd>    MySQL password (changes per client)
   --ghcr-user <user>        GitHub username (for pulling private image)
   --ghcr-token <token>      GitHub Personal Access Token (read:packages scope)
 
 Optional:
   --customer <name>         Default: same as --client
   --mysql-user <user>       Default: root
-  --rabbit-user <user>      Default: dass
+  --rabbit-user <user>      Default: dass (same across all clients)
+  --rabbit-password <pwd>   Default: dass (same across all clients)
   --kafka-host <host>       Default: localhost
   --kafka-port <port>       Default: 9092
   --kafka-topic <topic>     Default: panel-events
@@ -102,9 +102,8 @@ fi
 if [ -z "$MYSQL_PASSWORD" ]; then
   read -sp "MySQL password: " MYSQL_PASSWORD; echo
 fi
-if [ -z "$RABBIT_PASSWORD" ]; then
-  read -sp "RabbitMQ password: " RABBIT_PASSWORD; echo
-fi
+# RabbitMQ creds default to 'dass/dass' for all clients — only prompt if not set
+# and only used as overrides (leaving empty keeps the defaults in system.ini.default)
 if [ -z "$GHCR_USER" ]; then
   read -p "GitHub username (for image pull): " GHCR_USER
 fi
@@ -206,33 +205,33 @@ mkdir -p $PANEL_DIR
 cd $PANEL_DIR
 
 cat > .env << EOF
-# Panel-specific
+# --- Panel-Specific (REQUIRED) ---
 WORKSTATION_ID=${WORKSTATION_ID}
 PANEL_ID=${PANEL_ID}
-
-# Client-specific
 CUSTOMER_NAME=${CUSTOMER_NAME}
+
+# --- MySQL (REQUIRED — changes per client) ---
 MYSQL_DB=${MYSQL_DB}
 MYSQL_USER=${MYSQL_USER}
 MYSQL_PASSWORD=${MYSQL_PASSWORD}
+
+# --- RabbitMQ (uses defaults from image if not set) ---
 RABBIT_USER=${RABBIT_USER}
 RABBIT_PASSWORD=${RABBIT_PASSWORD}
 
-# Kafka (optional — leave user/password empty if Kafka is not used for this panel)
+# --- Kafka (optional) ---
 KAFKA_HOST=${KAFKA_HOST}
 KAFKA_PORT=${KAFKA_PORT}
 KAFKA_TOPIC=${KAFKA_TOPIC}
 KAFKA_USER=${KAFKA_USER}
 KAFKA_PASSWORD=${KAFKA_PASSWORD}
 
-# Connection (always localhost — tunnels handle routing)
+# --- Connection (tunnels handle routing) ---
 MSF_HOST=localhost
 MYSQL_HOST=localhost
 MYSQL_PORT=3306
-RABBIT_HOST=localhost
-RABBIT_PORT=5672
 
-# Update Settings
+# --- Updates ---
 AUTO_UPDATE=true
 JAR_VERSION=latest
 JAR_REPO=nuriozalp/download

@@ -1,0 +1,78 @@
+# Default system.ini for MSF Meta Panel
+# This file ships with the Docker image. At container startup, entrypoint.sh
+# will replace only the placeholders below with values from environment variables.
+# Users can also override this entire file by mounting their own system.ini
+# at /opt/meta/conf/system.ini via Docker volume.
+
+# --- Panel-Specific (replaced from env at runtime) ---
+settings.workstationId=__WORKSTATION_ID__
+settings.panelId=__PANEL_ID__
+customerName=__CUSTOMER_NAME__
+
+# --- MySQL (password/db replaced from env at runtime) ---
+mysql.datasource.driverClass=com.mysql.cj.jdbc.Driver
+mysql.datasource.jdbcUrl=jdbc\:mysql\://__MYSQL_HOST__\:__MYSQL_PORT__/__MYSQL_DB__?allowPublicKeyRetrieval=true&useUnicode=yes&characterEncoding=UTF-8&useJDBCCompliantTimezoneShift=true&useLegacyDatetimeCode=false&serverTimezone=UTC&autoReconnect=true&useSSL=false
+mysql.datasource.username=__MYSQL_USER__
+mysql.datasource.password=__MYSQL_PASSWORD__
+
+# --- MySQL Pool (fixed defaults) ---
+mysql.datasource.initialPoolSize=1
+mysql.datasource.minPoolSize=1
+mysql.datasource.maxPoolSize=10
+mysql.datasource.acquireIncrement=2
+mysql.datasource.acquireRetryAttempts=1000000000
+mysql.datasource.acquireRetryDelay=2000
+mysql.datasource.maxConnectionAge=20
+mysql.datasource.maxIdleTime=5
+mysql.datasource.timeout=20000
+mysql.datasource.unreturnedConnectionTimeout=20
+mysql.datasource.debugUnreturnedConnectionStackTraces=true
+mysql.datasource.numHelperThreads=3
+
+# --- RabbitMQ (fixed user/password, same across all clients) ---
+rabbit.host=localhost
+rabbit.port=5672
+rabbit.username=dass
+rabbit.password=dass
+rabbit.queue.multimachine=queue.multimachine
+
+# --- Kafka (optional, override via env if needed) ---
+kafka.host=localhost
+kafka.port=9092
+kafka.topic=panel-events
+kafka.username=
+kafka.password=
+
+# --- Host ---
+host=http\://localhost\:7189/
+
+# --- Fixed Settings ---
+settings.workcenterId=425
+settings.workstationName=GENERIC
+settings.wareHouseId=406
+settings.shiftId=12
+settings.theme=2
+settings.theme.darcula=false
+settings.activeJobOrderIndex=1
+settings.manuelStateCalculation=false
+settings.minCycleInterval=8571
+settings.multiScreen=0
+settings.newIOActive=false
+settings.powerConsumptionCoefficient=1
+settings.singleJobMachine=true
+settings.singleProduct=false
+language=TR
+country=US
+meta.os=linux
+panel.device=GENERIC
+io.IODataId=0
+newio.IODataId=187
+pat.patDataId=63
+plc.load.job=true
+plc.stop.reason=true
+scheduled.login.check.delay=120000
+scheduled.login.check.period=600000
+show.print.dialog=true
+show.print.interactive=true
+stream.max_packet_lenght=82
+stream.mode=true

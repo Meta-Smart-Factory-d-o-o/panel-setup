@@ -12,8 +12,14 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix
       - meta-data:/opt/meta/data
       - meta-logs:/opt/meta/logs
+      # Persistent system.ini — first run is generated from template + env,
+      # subsequent runs reuse the same file. To override completely, mount
+      # your own system.ini here (read-only):
+      #   - ./system.ini:/opt/meta/conf/system.ini:ro
+      - meta-conf:/opt/meta/conf
     privileged: true
 
 volumes:
   meta-data:
   meta-logs:
+  meta-conf:

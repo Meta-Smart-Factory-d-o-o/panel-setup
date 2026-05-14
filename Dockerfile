@@ -17,6 +17,7 @@ WORKDIR /opt/meta
 RUN mkdir -p /opt/meta/conf /opt/meta/data \
     && chown -R meta:meta /opt/meta
 
+COPY system.ini.default /opt/meta/system.ini.default
 COPY entrypoint.sh /opt/meta/entrypoint.sh
 RUN chmod +x /opt/meta/entrypoint.sh
 
