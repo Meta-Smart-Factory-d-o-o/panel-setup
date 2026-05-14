@@ -1,40 +1,43 @@
 #!/bin/bash
 # =============================================================================
-# MSF Panel — One-Command Installer
-# Usage:
-#   curl -sSL https://raw.githubusercontent.com/msf/panel-setup/main/install.sh | bash -s -- \
-#     --client norma \
-#     --workstation-id 441243 \
-#     --panel-id 441243 \
-#     --mysql-db norma_db \
-#     --mysql-password "yourpass" \
-#     --rabbit-password "yourpass"
+# MSF Panel — One-Command Installer (uses dass-desktop image)
+#
+# This installer:
+#  1. Installs Docker + cloudflared (if missing)
+#  2. Sets up Cloudflare access tunnels for MySQL + RabbitMQ
+#  3. Creates /opt/meta-panel/.env with DASS_* env vars (override system.ini)
+#  4. Logs in to GHCR (private image)
+#  5. Pulls ghcr.io/meta-smart-factory-d-o-o/dass-desktop:latest
+#  6. Starts the container
+#
+# Override pattern (handled by dass-desktop entrypoint):
+#   DASS_<key with __ instead of .>=value  →  <key>=value in system.ini
+#   Example: DASS_mysql__datasource__password=secret
+#            → mysql.datasource.password=secret
 # =============================================================================
 
 set -e
 
-# --- Default values ---
+# --- Required (panel-specific) ---
 CLIENT=""
 WORKSTATION_ID=""
 PANEL_ID=""
 CUSTOMER_NAME=""
-# MySQL — all fields configurable so they can be updated later via .env
-MYSQL_HOST="localhost"
+
+# --- MySQL (can be updated later via .env) ---
+MYSQL_HOST=""
 MYSQL_PORT="3306"
 MYSQL_DB=""
 MYSQL_USER="root"
 MYSQL_PASSWORD=""
-# RabbitMQ — defaults to 'dass/dass' (same across all clients)
-RABBIT_HOST="localhost"
+
+# --- RabbitMQ (defaults work for most clients) ---
+RABBIT_HOST=""
 RABBIT_PORT="5672"
 RABBIT_USER="dass"
-RABBIT_PASSWORD="dass"
-# Kafka — optional
-KAFKA_HOST="localhost"
-KAFKA_PORT="9092"
-KAFKA_TOPIC="panel-events"
-KAFKA_USER=""
-KAFKA_PASSWORD=""
+RABBIT_PASSWORD=""
+
+# --- GHCR (image is private) ---
 GHCR_USER=""
 GHCR_TOKEN=""
 
@@ -58,11 +61,6 @@ while [[ "$#" -gt 0 ]]; do
     --rabbit-port) RABBIT_PORT="$2"; shift ;;
     --rabbit-user) RABBIT_USER="$2"; shift ;;
     --rabbit-password) RABBIT_PASSWORD="$2"; shift ;;
-    --kafka-host) KAFKA_HOST="$2"; shift ;;
-    --kafka-port) KAFKA_PORT="$2"; shift ;;
-    --kafka-topic) KAFKA_TOPIC="$2"; shift ;;
-    --kafka-user) KAFKA_USER="$2"; shift ;;
-    --kafka-password) KAFKA_PASSWORD="$2"; shift ;;
     --ghcr-user) GHCR_USER="$2"; shift ;;
     --ghcr-token) GHCR_TOKEN="$2"; shift ;;
     -h|--help)
@@ -74,30 +72,21 @@ Required:
   --workstation-id <id>     Unique workstation ID
   --panel-id <id>           Unique panel ID
   --mysql-db <name>         MySQL database name
-  --mysql-password <pwd>    MySQL password (changes per client)
-  --ghcr-user <user>        GitHub username (for pulling private image)
+  --mysql-password <pwd>    MySQL password
+  --rabbit-password <pwd>   RabbitMQ password
+  --ghcr-user <user>        GitHub username
   --ghcr-token <token>      GitHub Personal Access Token (read:packages scope)
 
-Optional (MySQL — defaults work with Cloudflare tunnel):
-  --mysql-host <host>       Default: localhost (tunnel forwards to server)
+Optional:
+  --customer <name>         Default: same as --client
+  --mysql-host <host>       Default: localhost (Cloudflare tunnel)
   --mysql-port <port>       Default: 3306
   --mysql-user <user>       Default: root
-
-Optional (RabbitMQ — same across all clients by default):
-  --rabbit-host <host>      Default: localhost (tunnel forwards to server)
+  --rabbit-host <host>      Default: localhost (Cloudflare tunnel)
   --rabbit-port <port>      Default: 5672
   --rabbit-user <user>      Default: dass
-  --rabbit-password <pwd>   Default: dass
 
-Optional (Other):
-  --customer <name>         Default: same as --client
-  --kafka-host <host>       Default: localhost
-  --kafka-port <port>       Default: 9092
-  --kafka-topic <topic>     Default: panel-events
-  --kafka-user <user>       Default: (empty)
-  --kafka-password <pwd>    Default: (empty)
-
-All values can be updated later by editing /opt/meta-panel/.env and running:
+All values can be updated later by editing /opt/meta-panel/.env then:
   cd /opt/meta-panel && docker compose up -d
 EOF
       exit 0
@@ -107,48 +96,33 @@ EOF
   shift
 done
 
-# --- Interactive prompt if missing ---
-if [ -z "$CLIENT" ]; then
-  read -p "Client (norma/simsek/mc4): " CLIENT
-fi
-if [ -z "$WORKSTATION_ID" ]; then
-  read -p "Workstation ID: " WORKSTATION_ID
-fi
+# --- Interactive prompts for missing required values ---
+[ -z "$CLIENT" ]          && read -p "Client (norma/simsek/mc4): " CLIENT
+[ -z "$WORKSTATION_ID" ]  && read -p "Workstation ID: " WORKSTATION_ID
 if [ -z "$PANEL_ID" ]; then
   read -p "Panel ID [$WORKSTATION_ID]: " PANEL_ID
   PANEL_ID=${PANEL_ID:-$WORKSTATION_ID}
 fi
-if [ -z "$MYSQL_DB" ]; then
-  read -p "MySQL Database name: " MYSQL_DB
-fi
-if [ -z "$MYSQL_PASSWORD" ]; then
-  read -sp "MySQL password: " MYSQL_PASSWORD; echo
-fi
-# RabbitMQ creds default to 'dass/dass' for all clients — only prompt if not set
-# and only used as overrides (leaving empty keeps the defaults in system.ini.default)
-if [ -z "$GHCR_USER" ]; then
-  read -p "GitHub username (for image pull): " GHCR_USER
-fi
-if [ -z "$GHCR_TOKEN" ]; then
-  read -sp "GitHub PAT (read:packages scope): " GHCR_TOKEN; echo
-fi
-if [ -z "$CUSTOMER_NAME" ]; then
-  CUSTOMER_NAME=$CLIENT
-fi
+[ -z "$MYSQL_DB" ]        && read -p "MySQL database name: " MYSQL_DB
+[ -z "$MYSQL_PASSWORD" ]  && { read -sp "MySQL password: " MYSQL_PASSWORD; echo; }
+[ -z "$RABBIT_PASSWORD" ] && { read -sp "RabbitMQ password: " RABBIT_PASSWORD; echo; }
+[ -z "$GHCR_USER" ]       && read -p "GitHub username: " GHCR_USER
+[ -z "$GHCR_TOKEN" ]      && { read -sp "GitHub PAT (read:packages): " GHCR_TOKEN; echo; }
+[ -z "$CUSTOMER_NAME" ]   && CUSTOMER_NAME=$CLIENT
 
 # --- Client → tunnel hostname mapping ---
 case "$CLIENT" in
   norma)
-    MYSQL_TUNNEL="norma-mysql.msfdemo.com"
-    RABBIT_TUNNEL="norma-rabbitmq.msfdemo.com"
+    MYSQL_TUNNEL_HOST="norma-mysql.msfdemo.com"
+    RABBIT_TUNNEL_HOST="norma-rabbitmq.msfdemo.com"
     ;;
   simsek)
-    MYSQL_TUNNEL="simsek-mysql.msfdemo.com"
-    RABBIT_TUNNEL="simsek-rabbitmq.msfdemo.com"
+    MYSQL_TUNNEL_HOST="simsek-mysql.msfdemo.com"
+    RABBIT_TUNNEL_HOST="simsek-rabbitmq.msfdemo.com"
     ;;
   mc4)
-    MYSQL_TUNNEL="mc4-mysql.msfdemo.com"
-    RABBIT_TUNNEL="mc4-rabbitmq.msfdemo.com"
+    MYSQL_TUNNEL_HOST="mc4-mysql.msfdemo.com"
+    RABBIT_TUNNEL_HOST="mc4-rabbitmq.msfdemo.com"
     ;;
   *)
     echo "ERROR: Unknown client '$CLIENT'. Supported: norma, simsek, mc4"
@@ -156,16 +130,20 @@ case "$CLIENT" in
     ;;
 esac
 
+# Default hosts to localhost (tunnels forward to actual server)
+[ -z "$MYSQL_HOST" ]  && MYSQL_HOST="localhost"
+[ -z "$RABBIT_HOST" ] && RABBIT_HOST="localhost"
+
 echo ""
 echo "=========================================="
-echo "  MSF Panel Setup"
+echo "  MSF Panel Setup (dass-desktop)"
 echo "=========================================="
 echo "  Client:         $CLIENT"
 echo "  Workstation ID: $WORKSTATION_ID"
 echo "  Panel ID:       $PANEL_ID"
 echo "  MySQL DB:       $MYSQL_DB"
-echo "  MySQL Tunnel:   $MYSQL_TUNNEL"
-echo "  RabbitMQ Tun.:  $RABBIT_TUNNEL"
+echo "  MySQL Tunnel:   $MYSQL_TUNNEL_HOST → localhost:3306"
+echo "  RabbitMQ Tun.:  $RABBIT_TUNNEL_HOST → localhost:5672"
 echo "=========================================="
 echo ""
 
@@ -204,7 +182,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/bin/sh -c '/usr/local/bin/cloudflared access tcp --hostname ${MYSQL_TUNNEL} --url localhost:3306 & /usr/local/bin/cloudflared access tcp --hostname ${RABBIT_TUNNEL} --url localhost:5672 & wait'
+ExecStart=/bin/sh -c '/usr/local/bin/cloudflared access tcp --hostname ${MYSQL_TUNNEL_HOST} --url localhost:3306 & /usr/local/bin/cloudflared access tcp --hostname ${RABBIT_TUNNEL_HOST} --url localhost:5672 & wait'
 Restart=always
 RestartSec=5
 User=root
@@ -226,45 +204,37 @@ PANEL_DIR="/opt/meta-panel"
 mkdir -p $PANEL_DIR
 cd $PANEL_DIR
 
+# Build JDBC URL
+JDBC_URL="jdbc:mysql://${MYSQL_HOST}:${MYSQL_PORT}/${MYSQL_DB}?useUnicode=yes&characterEncoding=UTF-8&useJDBCCompliantTimezoneShift=true&useLegacyDatetimeCode=false&serverTimezone=UTC&autoReconnect=true&useSSL=false&allowPublicKeyRetrieval=true"
+
 cat > .env << EOF
 # =========================================================================
 # Panel Configuration
-# All values below can be updated later — just edit this file and run:
+# Override system.ini values via DASS_* env vars (handled by dass-desktop
+# entrypoint.sh — converts DASS_a__b__c → a.b.c=value in system.ini).
+#
+# To update any value: edit this file then run:
 #   cd /opt/meta-panel && docker compose up -d
 # =========================================================================
 
-# --- Panel-Specific (UNIQUE per panel) ---
-WORKSTATION_ID=${WORKSTATION_ID}
-PANEL_ID=${PANEL_ID}
-CUSTOMER_NAME=${CUSTOMER_NAME}
+# --- Panel-Specific ---
+DASS_settings__workstationId=${WORKSTATION_ID}
+DASS_settings__panelId=${PANEL_ID}
+DASS_customerName=${CUSTOMER_NAME}
 
-# --- MySQL (full set — easy to update later) ---
-MYSQL_HOST=${MYSQL_HOST}
-MYSQL_PORT=${MYSQL_PORT}
-MYSQL_DB=${MYSQL_DB}
-MYSQL_USER=${MYSQL_USER}
-MYSQL_PASSWORD=${MYSQL_PASSWORD}
+# --- MySQL ---
+DASS_mysql__datasource__jdbcUrl=${JDBC_URL}
+DASS_mysql__datasource__username=${MYSQL_USER}
+DASS_mysql__datasource__password=${MYSQL_PASSWORD}
 
-# --- RabbitMQ (defaults same across all clients) ---
-RABBIT_HOST=${RABBIT_HOST}
-RABBIT_PORT=${RABBIT_PORT}
-RABBIT_USER=${RABBIT_USER}
-RABBIT_PASSWORD=${RABBIT_PASSWORD}
+# --- RabbitMQ ---
+DASS_rabbit__host=${RABBIT_HOST}
+DASS_rabbit__port=${RABBIT_PORT}
+DASS_rabbit__username=${RABBIT_USER}
+DASS_rabbit__password=${RABBIT_PASSWORD}
 
-# --- Kafka (optional — leave empty if not used) ---
-KAFKA_HOST=${KAFKA_HOST}
-KAFKA_PORT=${KAFKA_PORT}
-KAFKA_TOPIC=${KAFKA_TOPIC}
-KAFKA_USER=${KAFKA_USER}
-KAFKA_PASSWORD=${KAFKA_PASSWORD}
-
-# --- MSF API host (default: localhost via tunnel) ---
-MSF_HOST=localhost
-
-# --- Updates ---
-AUTO_UPDATE=true
-JAR_VERSION=latest
-JAR_REPO=nuriozalp/download
+# --- MSF API host (override panel's host= field) ---
+DASS_host=http://localhost:7189/
 EOF
 
 chmod 600 .env
@@ -281,18 +251,20 @@ echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 echo "==> Allowing Docker GUI access..."
 xhost +local:docker 2>/dev/null || true
 
-# --- Step 8: Start the panel ---
-echo "==> Pulling and starting panel..."
+# --- Step 8: Pull and start the panel ---
+echo "==> Pulling dass-desktop image..."
 docker compose pull
+echo "==> Starting panel..."
 docker compose up -d
 
 echo ""
 echo "=========================================="
-echo "  ✓ Setup Complete!"
+echo "  Setup Complete!"
 echo "=========================================="
 echo ""
 echo "  Panel directory: $PANEL_DIR"
 echo "  View logs:       docker compose -f $PANEL_DIR/docker-compose.yml logs -f"
 echo "  Restart:         docker compose -f $PANEL_DIR/docker-compose.yml restart"
 echo "  Stop:            docker compose -f $PANEL_DIR/docker-compose.yml down"
+echo "  Update vars:     nano $PANEL_DIR/.env && docker compose up -d"
 echo ""

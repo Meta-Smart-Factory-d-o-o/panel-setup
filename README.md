@@ -1,6 +1,18 @@
 # MSF Panel Setup
 
-One-command installer for MSF panel applications across all clients (Norma, Simsek, MC4).
+One-command installer that deploys the **dass-desktop** Docker image to MSF panels.
+
+> The panel application Docker image (`ghcr.io/meta-smart-factory-d-o-o/dass-desktop`) is built and maintained from the [`dass-portal`](https://github.com/Meta-Smart-Factory-d-o-o/dass-portal) repo. This `panel-setup` repo only ships an installer + docker-compose for deploying it on panels.
+
+---
+
+## How It Works
+
+1. The `dass-desktop` image already contains a default `system.ini`
+2. Its entrypoint scans for env vars prefixed with `DASS_` and overrides the matching keys in `system.ini` at container start
+   - Naming convention: `DASS_<key with __ instead of .>`
+   - Example: `DASS_mysql__datasource__password=secret` → `mysql.datasource.password=secret`
+3. Cloudflare access tunnels route `localhost:3306` and `localhost:5672` from the panel to the centralized MySQL/RabbitMQ server
 
 ---
 
@@ -13,136 +25,100 @@ curl -sSL https://raw.githubusercontent.com/Meta-Smart-Factory-d-o-o/panel-setup
   --client norma \
   --workstation-id 441243 \
   --panel-id 441243 \
-  --mysql-db norma_db \
+  --mysql-db dass_norma \
   --mysql-password "yourpass" \
   --rabbit-password "yourpass" \
   --ghcr-user farhanawan77 \
   --ghcr-token "ghp_xxxxxxxxxxxxxxxxxxxx"
 ```
 
-Or run interactively (script will prompt for values including GHCR credentials):
+Or run interactively (will prompt for missing values):
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/Meta-Smart-Factory-d-o-o/panel-setup/main/install.sh | sudo bash
 ```
 
-> **Note:** The Docker image is hosted in a **private** GHCR registry, so a GitHub Personal Access Token (PAT) with `read:packages` scope is required. Generate one at: https://github.com/settings/tokens/new?scopes=read:packages&description=msf-panel-ghcr
+> Generate a GitHub PAT (read:packages scope only) at:
+> https://github.com/settings/tokens/new?scopes=read:packages&description=msf-panel-ghcr
 
 ---
 
-## What it Does
+## What It Does
 
 1. Installs **Docker** (if not present)
 2. Installs **cloudflared** (if not present)
-3. Sets up Cloudflare tunnels for MySQL (port 3306) and RabbitMQ (port 5672) — routes to the correct client's server
-4. Generates `.env` file with panel-specific values
-5. Pulls the latest panel Docker image from GHCR
-6. Starts the panel container (auto-restarts on reboot)
+3. Sets up Cloudflare access tunnels (systemd service `msf-tunnels.service`)
+   - MySQL: `<client>-mysql.msfdemo.com` → `localhost:3306`
+   - RabbitMQ: `<client>-rabbitmq.msfdemo.com` → `localhost:5672`
+4. Creates `/opt/meta-panel/.env` with `DASS_*` override variables
+5. Logs in to GHCR (image is private)
+6. Pulls `ghcr.io/meta-smart-factory-d-o-o/dass-desktop:latest`
+7. Starts the container
 
 ---
 
 ## Supported Clients
 
 | Client | MySQL Tunnel | RabbitMQ Tunnel |
-|--------|--------------|-----------------|
+|--------|-------------|------------------|
 | `norma` | `norma-mysql.msfdemo.com` | `norma-rabbitmq.msfdemo.com` |
 | `simsek` | `simsek-mysql.msfdemo.com` | `simsek-rabbitmq.msfdemo.com` |
 | `mc4` | `mc4-mysql.msfdemo.com` | `mc4-rabbitmq.msfdemo.com` |
 
-To add a new client, edit `install.sh` and add a new `case` entry.
-
 ---
 
-## Required Parameters
-
-| Flag | Description | Example |
-|------|-------------|---------|
-| `--client` | Client name | `norma` |
-| `--workstation-id` | Unique workstation ID | `441243` |
-| `--panel-id` | Unique panel ID | `441243` |
-| `--mysql-db` | MySQL database name | `norma_db` |
-| `--mysql-password` | MySQL password | `secret` |
-| `--rabbit-password` | RabbitMQ password | `secret` |
-
-## Optional Parameters
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--workcenter-id` | `425` | Workcenter ID |
-| `--workstation-name` | `GENERIC` | Display name |
-| `--warehouse-id` | `406` | Warehouse ID |
-| `--customer` | same as `--client` | Customer name in system.ini |
-| `--language` | `TR` | Language code |
-| `--country` | `US` | Country code |
-| `--mysql-user` | `root` | MySQL user |
-| `--rabbit-user` | `dass` | RabbitMQ user |
-
----
-
-## After Installation
-
-Panel files are at `/opt/meta-panel/`.
+## Operations
 
 ```bash
 # View logs
 docker compose -f /opt/meta-panel/docker-compose.yml logs -f
 
-# Restart panel
+# Restart
 docker compose -f /opt/meta-panel/docker-compose.yml restart
 
-# Stop panel
+# Stop
 docker compose -f /opt/meta-panel/docker-compose.yml down
 
-# Update to latest version
+# Update image to latest
 cd /opt/meta-panel && docker compose pull && docker compose up -d
+
+# Update any config value
+nano /opt/meta-panel/.env
+cd /opt/meta-panel && docker compose up -d
 ```
 
 ---
 
-## Repo Structure
+## Updating a Value Later
 
+All panel/client settings can be changed by editing `/opt/meta-panel/.env`:
+
+```bash
+sudo nano /opt/meta-panel/.env
+# change DASS_mysql__datasource__password=newpass
+cd /opt/meta-panel && sudo docker compose up -d
 ```
-panel-setup/
-├── install.sh           # Main one-command installer
-├── Dockerfile           # Panel image build definition
-├── entrypoint.sh        # Generates system.ini from env vars
-├── docker-compose.yml   # Template for panel deployment
-├── .env.example         # Template for panel-specific values
-└── .github/workflows/
-    └── build.yml        # CI/CD: builds & pushes image to GHCR
-```
+
+The container will restart and pick up the new value automatically.
 
 ---
 
-## CI/CD
+## DASS_* Override Reference
 
-On every push to `main` branch, GitHub Actions automatically:
-1. Builds the Docker image
-2. Pushes to `ghcr.io/msf/panel-setup:latest`
+Any field in `system.ini` can be overridden using this env var pattern:
 
-Panels can then pull the latest image with `docker compose pull && docker compose up -d`.
+| system.ini key | env var |
+|---------------|---------|
+| `mysql.datasource.password` | `DASS_mysql__datasource__password` |
+| `mysql.datasource.username` | `DASS_mysql__datasource__username` |
+| `mysql.datasource.jdbcUrl` | `DASS_mysql__datasource__jdbcUrl` |
+| `rabbit.host` | `DASS_rabbit__host` |
+| `rabbit.password` | `DASS_rabbit__password` |
+| `settings.workstationId` | `DASS_settings__workstationId` |
+| `settings.panelId` | `DASS_settings__panelId` |
+| `customerName` | `DASS_customerName` |
+| `host` | `DASS_host` |
+| `language` | `DASS_language` |
+| `country` | `DASS_country` |
 
----
-
-## Examples
-
-### Norma US Panel
-```bash
-curl -sSL <url>/install.sh | sudo bash -s -- \
-  --client norma --workstation-id 441267 --panel-id 441267 \
-  --mysql-db norma_db --mysql-password "root123" --rabbit-password "dass123456"
-```
-
-### Simsek Panel
-```bash
-curl -sSL <url>/install.sh | sudo bash -s -- \
-  --client simsek --workstation-id 5001 --panel-id 5001 \
-  --mysql-db teknia_group --mysql-password "t!eK*nia<p123" --rabbit-password "dass123456"
-```
-
-### MC4 Panel
-```bash
-curl -sSL <url>/install.sh | sudo bash -s -- \
-  --client mc4 --workstation-id 9001 --panel-id 9001 \
-  --mysql-db mc4_db --mysql-password "mc4pass" --rabbit-password "mc4pass"
-```
+(Any key in `system.ini` works — just replace `.` with `__` and prefix `DASS_`.)
