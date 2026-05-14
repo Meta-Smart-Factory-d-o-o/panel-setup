@@ -218,7 +218,7 @@ MYSQL_PASSWORD=${MYSQL_PASSWORD}
 RABBIT_USER=${RABBIT_USER}
 RABBIT_PASSWORD=${RABBIT_PASSWORD}
 
-# Kafka
+# Kafka (optional — leave user/password empty if Kafka is not used for this panel)
 KAFKA_HOST=${KAFKA_HOST}
 KAFKA_PORT=${KAFKA_PORT}
 KAFKA_TOPIC=${KAFKA_TOPIC}
