@@ -1,0 +1,19 @@
+services:
+  meta-panel:
+    image: ghcr.io/msf/panel-setup:latest
+    container_name: meta-panel
+    network_mode: host
+    restart: always
+    env_file: .env
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+    volumes:
+      - /dev:/dev
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      - meta-data:/opt/meta/data
+      - meta-logs:/opt/meta/logs
+    privileged: true
+
+volumes:
+  meta-data:
+  meta-logs:
