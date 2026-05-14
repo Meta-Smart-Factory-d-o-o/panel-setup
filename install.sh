@@ -18,11 +18,18 @@ CLIENT=""
 WORKSTATION_ID=""
 PANEL_ID=""
 CUSTOMER_NAME=""
+# MySQL — all fields configurable so they can be updated later via .env
+MYSQL_HOST="localhost"
+MYSQL_PORT="3306"
 MYSQL_DB=""
 MYSQL_USER="root"
 MYSQL_PASSWORD=""
+# RabbitMQ — defaults to 'dass/dass' (same across all clients)
+RABBIT_HOST="localhost"
+RABBIT_PORT="5672"
 RABBIT_USER="dass"
-RABBIT_PASSWORD=""
+RABBIT_PASSWORD="dass"
+# Kafka — optional
 KAFKA_HOST="localhost"
 KAFKA_PORT="9092"
 KAFKA_TOPIC="panel-events"
@@ -42,9 +49,13 @@ while [[ "$#" -gt 0 ]]; do
     --workstation-id) WORKSTATION_ID="$2"; shift ;;
     --panel-id) PANEL_ID="$2"; shift ;;
     --customer) CUSTOMER_NAME="$2"; shift ;;
+    --mysql-host) MYSQL_HOST="$2"; shift ;;
+    --mysql-port) MYSQL_PORT="$2"; shift ;;
     --mysql-db) MYSQL_DB="$2"; shift ;;
     --mysql-user) MYSQL_USER="$2"; shift ;;
     --mysql-password) MYSQL_PASSWORD="$2"; shift ;;
+    --rabbit-host) RABBIT_HOST="$2"; shift ;;
+    --rabbit-port) RABBIT_PORT="$2"; shift ;;
     --rabbit-user) RABBIT_USER="$2"; shift ;;
     --rabbit-password) RABBIT_PASSWORD="$2"; shift ;;
     --kafka-host) KAFKA_HOST="$2"; shift ;;
@@ -67,16 +78,27 @@ Required:
   --ghcr-user <user>        GitHub username (for pulling private image)
   --ghcr-token <token>      GitHub Personal Access Token (read:packages scope)
 
-Optional:
-  --customer <name>         Default: same as --client
+Optional (MySQL — defaults work with Cloudflare tunnel):
+  --mysql-host <host>       Default: localhost (tunnel forwards to server)
+  --mysql-port <port>       Default: 3306
   --mysql-user <user>       Default: root
-  --rabbit-user <user>      Default: dass (same across all clients)
-  --rabbit-password <pwd>   Default: dass (same across all clients)
+
+Optional (RabbitMQ — same across all clients by default):
+  --rabbit-host <host>      Default: localhost (tunnel forwards to server)
+  --rabbit-port <port>      Default: 5672
+  --rabbit-user <user>      Default: dass
+  --rabbit-password <pwd>   Default: dass
+
+Optional (Other):
+  --customer <name>         Default: same as --client
   --kafka-host <host>       Default: localhost
   --kafka-port <port>       Default: 9092
   --kafka-topic <topic>     Default: panel-events
   --kafka-user <user>       Default: (empty)
   --kafka-password <pwd>    Default: (empty)
+
+All values can be updated later by editing /opt/meta-panel/.env and running:
+  cd /opt/meta-panel && docker compose up -d
 EOF
       exit 0
       ;;
@@ -205,31 +227,39 @@ mkdir -p $PANEL_DIR
 cd $PANEL_DIR
 
 cat > .env << EOF
-# --- Panel-Specific (REQUIRED) ---
+# =========================================================================
+# Panel Configuration
+# All values below can be updated later — just edit this file and run:
+#   cd /opt/meta-panel && docker compose up -d
+# =========================================================================
+
+# --- Panel-Specific (UNIQUE per panel) ---
 WORKSTATION_ID=${WORKSTATION_ID}
 PANEL_ID=${PANEL_ID}
 CUSTOMER_NAME=${CUSTOMER_NAME}
 
-# --- MySQL (REQUIRED — changes per client) ---
+# --- MySQL (full set — easy to update later) ---
+MYSQL_HOST=${MYSQL_HOST}
+MYSQL_PORT=${MYSQL_PORT}
 MYSQL_DB=${MYSQL_DB}
 MYSQL_USER=${MYSQL_USER}
 MYSQL_PASSWORD=${MYSQL_PASSWORD}
 
-# --- RabbitMQ (uses defaults from image if not set) ---
+# --- RabbitMQ (defaults same across all clients) ---
+RABBIT_HOST=${RABBIT_HOST}
+RABBIT_PORT=${RABBIT_PORT}
 RABBIT_USER=${RABBIT_USER}
 RABBIT_PASSWORD=${RABBIT_PASSWORD}
 
-# --- Kafka (optional) ---
+# --- Kafka (optional — leave empty if not used) ---
 KAFKA_HOST=${KAFKA_HOST}
 KAFKA_PORT=${KAFKA_PORT}
 KAFKA_TOPIC=${KAFKA_TOPIC}
 KAFKA_USER=${KAFKA_USER}
 KAFKA_PASSWORD=${KAFKA_PASSWORD}
 
-# --- Connection (tunnels handle routing) ---
+# --- MSF API host (default: localhost via tunnel) ---
 MSF_HOST=localhost
-MYSQL_HOST=localhost
-MYSQL_PORT=3306
 
 # --- Updates ---
 AUTO_UPDATE=true
