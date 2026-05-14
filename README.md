@@ -9,20 +9,24 @@ One-command installer for MSF panel applications across all clients (Norma, Sims
 On a fresh panel (Ubuntu/Debian), run as root:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/msf/panel-setup/main/install.sh | sudo bash -s -- \
+curl -sSL https://raw.githubusercontent.com/Meta-Smart-Factory-d-o-o/panel-setup/main/install.sh | sudo bash -s -- \
   --client norma \
   --workstation-id 441243 \
   --panel-id 441243 \
   --mysql-db norma_db \
   --mysql-password "yourpass" \
-  --rabbit-password "yourpass"
+  --rabbit-password "yourpass" \
+  --ghcr-user farhanawan77 \
+  --ghcr-token "ghp_xxxxxxxxxxxxxxxxxxxx"
 ```
 
-Or run interactively (script will prompt for values):
+Or run interactively (script will prompt for values including GHCR credentials):
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/msf/panel-setup/main/install.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/Meta-Smart-Factory-d-o-o/panel-setup/main/install.sh | sudo bash
 ```
+
+> **Note:** The Docker image is hosted in a **private** GHCR registry, so a GitHub Personal Access Token (PAT) with `read:packages` scope is required. Generate one at: https://github.com/settings/tokens/new?scopes=read:packages&description=msf-panel-ghcr
 
 ---
 

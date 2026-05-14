@@ -1,6 +1,6 @@
 services:
   meta-panel:
-    image: ghcr.io/msf/panel-setup:latest
+    image: ghcr.io/meta-smart-factory-d-o-o/panel-setup:latest
     container_name: meta-panel
     network_mode: host
     restart: always

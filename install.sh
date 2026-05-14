@@ -28,6 +28,12 @@ KAFKA_PORT="9092"
 KAFKA_TOPIC="panel-events"
 KAFKA_USER=""
 KAFKA_PASSWORD=""
+GHCR_USER=""
+GHCR_TOKEN=""
+
+REPO_OWNER="meta-smart-factory-d-o-o"
+REPO_NAME="panel-setup"
+RAW_BASE="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main"
 
 # --- Parse args ---
 while [[ "$#" -gt 0 ]]; do
@@ -46,6 +52,8 @@ while [[ "$#" -gt 0 ]]; do
     --kafka-topic) KAFKA_TOPIC="$2"; shift ;;
     --kafka-user) KAFKA_USER="$2"; shift ;;
     --kafka-password) KAFKA_PASSWORD="$2"; shift ;;
+    --ghcr-user) GHCR_USER="$2"; shift ;;
+    --ghcr-token) GHCR_TOKEN="$2"; shift ;;
     -h|--help)
       cat << EOF
 MSF Panel Installer
@@ -57,6 +65,8 @@ Required:
   --mysql-db <name>         MySQL database name
   --mysql-password <pwd>    MySQL password
   --rabbit-password <pwd>   RabbitMQ password
+  --ghcr-user <user>        GitHub username (for pulling private image)
+  --ghcr-token <token>      GitHub Personal Access Token (read:packages scope)
 
 Optional:
   --customer <name>         Default: same as --client
@@ -94,6 +104,12 @@ if [ -z "$MYSQL_PASSWORD" ]; then
 fi
 if [ -z "$RABBIT_PASSWORD" ]; then
   read -sp "RabbitMQ password: " RABBIT_PASSWORD; echo
+fi
+if [ -z "$GHCR_USER" ]; then
+  read -p "GitHub username (for image pull): " GHCR_USER
+fi
+if [ -z "$GHCR_TOKEN" ]; then
+  read -sp "GitHub PAT (read:packages scope): " GHCR_TOKEN; echo
 fi
 if [ -z "$CUSTOMER_NAME" ]; then
   CUSTOMER_NAME=$CLIENT
@@ -226,13 +242,17 @@ chmod 600 .env
 
 # --- Step 5: Download docker-compose.yml ---
 echo "==> Downloading docker-compose.yml..."
-curl -sSL https://raw.githubusercontent.com/msf/panel-setup/main/docker-compose.yml -o docker-compose.yml
+curl -sSL "${RAW_BASE}/docker-compose.yml" -o docker-compose.yml
 
-# --- Step 6: Allow Docker to access X display (for GUI) ---
+# --- Step 6: Login to GHCR (image is private) ---
+echo "==> Logging in to GHCR..."
+echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+
+# --- Step 7: Allow Docker to access X display (for GUI) ---
 echo "==> Allowing Docker GUI access..."
 xhost +local:docker 2>/dev/null || true
 
-# --- Step 7: Start the panel ---
+# --- Step 8: Start the panel ---
 echo "==> Pulling and starting panel..."
 docker compose pull
 docker compose up -d
