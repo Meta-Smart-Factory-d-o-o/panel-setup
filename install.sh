@@ -68,7 +68,8 @@ while [[ "$#" -gt 0 ]]; do
 MSF Panel Installer
 
 Required:
-  --client <name>           Client name (norma|simsek|mc4)
+  --client <name>           Client name (norma|simsek|mc4|msfdemo)
+                            'msfdemo' = MSF 209 test server (direct IP, no tunnel)
   --workstation-id <id>     Unique workstation ID
   --panel-id <id>           Unique panel ID
   --mysql-db <name>         MySQL database name
@@ -111,6 +112,7 @@ fi
 [ -z "$CUSTOMER_NAME" ]   && CUSTOMER_NAME=$CLIENT
 
 # --- Client → tunnel hostname mapping ---
+USE_TUNNELS="true"
 case "$CLIENT" in
   norma)
     MYSQL_TUNNEL_HOST="norma-mysql.msfdemo.com"
@@ -124,8 +126,16 @@ case "$CLIENT" in
     MYSQL_TUNNEL_HOST="mc4-mysql.msfdemo.com"
     RABBIT_TUNNEL_HOST="mc4-rabbitmq.msfdemo.com"
     ;;
+  msfdemo)
+    # MSF 209 demo/test server — direct IP access, no Cloudflare tunnel needed
+    USE_TUNNELS="false"
+    [ -z "$MYSQL_HOST" ]  && MYSQL_HOST="209.250.235.243"
+    [ -z "$RABBIT_HOST" ] && RABBIT_HOST="209.250.235.243"
+    MYSQL_TUNNEL_HOST="(direct IP — no tunnel)"
+    RABBIT_TUNNEL_HOST="(direct IP — no tunnel)"
+    ;;
   *)
-    echo "ERROR: Unknown client '$CLIENT'. Supported: norma, simsek, mc4"
+    echo "ERROR: Unknown client '$CLIENT'. Supported: norma, simsek, mc4, msfdemo"
     exit 1
     ;;
 esac
@@ -142,8 +152,13 @@ echo "  Client:         $CLIENT"
 echo "  Workstation ID: $WORKSTATION_ID"
 echo "  Panel ID:       $PANEL_ID"
 echo "  MySQL DB:       $MYSQL_DB"
-echo "  MySQL Tunnel:   $MYSQL_TUNNEL_HOST → localhost:3306"
-echo "  RabbitMQ Tun.:  $RABBIT_TUNNEL_HOST → localhost:5672"
+if [ "$USE_TUNNELS" = "true" ]; then
+  echo "  MySQL Tunnel:   $MYSQL_TUNNEL_HOST → localhost:3306"
+  echo "  RabbitMQ Tun.:  $RABBIT_TUNNEL_HOST → localhost:5672"
+else
+  echo "  MySQL Host:     $MYSQL_HOST:$MYSQL_PORT (direct, no tunnel)"
+  echo "  RabbitMQ Host:  $RABBIT_HOST:$RABBIT_PORT (direct, no tunnel)"
+fi
 echo "=========================================="
 echo ""
 
@@ -161,21 +176,22 @@ else
   echo "==> Docker already installed."
 fi
 
-# --- Step 2: Install cloudflared ---
-if ! command -v cloudflared &> /dev/null; then
-  echo "==> Installing cloudflared..."
-  apt-get update -qq
-  apt-get install -y curl
-  curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -o /tmp/cloudflared.deb
-  dpkg -i /tmp/cloudflared.deb
-  rm /tmp/cloudflared.deb
-else
-  echo "==> cloudflared already installed."
-fi
+# --- Step 2: Install cloudflared (only if tunnels are used) ---
+if [ "$USE_TUNNELS" = "true" ]; then
+  if ! command -v cloudflared &> /dev/null; then
+    echo "==> Installing cloudflared..."
+    apt-get update -qq
+    apt-get install -y curl
+    curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -o /tmp/cloudflared.deb
+    dpkg -i /tmp/cloudflared.deb
+    rm /tmp/cloudflared.deb
+  else
+    echo "==> cloudflared already installed."
+  fi
 
-# --- Step 3: Setup Cloudflare tunnels (MySQL + RabbitMQ) ---
-echo "==> Setting up Cloudflare tunnels..."
-cat > /etc/systemd/system/msf-tunnels.service << EOF
+  # --- Step 3: Setup Cloudflare tunnels (MySQL + RabbitMQ) ---
+  echo "==> Setting up Cloudflare tunnels..."
+  cat > /etc/systemd/system/msf-tunnels.service << EOF
 [Unit]
 Description=MSF Cloudflare Access Tunnels for ${CLIENT}
 After=network.target
@@ -191,12 +207,15 @@ User=root
 WantedBy=multi-user.target
 EOF
 
-systemctl daemon-reload
-systemctl enable msf-tunnels.service
-systemctl restart msf-tunnels.service
+  systemctl daemon-reload
+  systemctl enable msf-tunnels.service
+  systemctl restart msf-tunnels.service
 
-echo "==> Waiting for tunnels to come up..."
-sleep 5
+  echo "==> Waiting for tunnels to come up..."
+  sleep 5
+else
+  echo "==> Skipping cloudflared setup (client uses direct IP, not tunnel)"
+fi
 
 # --- Step 4: Create panel directory and .env ---
 echo "==> Creating panel configuration..."
@@ -204,8 +223,8 @@ PANEL_DIR="/opt/meta-panel"
 mkdir -p $PANEL_DIR
 cd $PANEL_DIR
 
-# Build JDBC URL
-JDBC_URL="jdbc:mysql://${MYSQL_HOST}:${MYSQL_PORT}/${MYSQL_DB}?useUnicode=yes&characterEncoding=UTF-8&useJDBCCompliantTimezoneShift=true&useLegacyDatetimeCode=false&serverTimezone=UTC&autoReconnect=true&useSSL=false&allowPublicKeyRetrieval=true"
+# Build JDBC URL (per developer recommendation — simpler with timeouts)
+JDBC_URL="jdbc:mysql://${MYSQL_HOST}:${MYSQL_PORT}/${MYSQL_DB}?useSSL=false&connectTimeout=10000&socketTimeout=10000&autoReconnect=true&allowPublicKeyRetrieval=true"
 
 cat > .env << EOF
 # =========================================================================
@@ -232,6 +251,8 @@ DASS_rabbit__host=${RABBIT_HOST}
 DASS_rabbit__port=${RABBIT_PORT}
 DASS_rabbit__username=${RABBIT_USER}
 DASS_rabbit__password=${RABBIT_PASSWORD}
+# Disable SSL for RabbitMQ (default system.ini has this true, but Norma/msfdemo do not use SSL)
+DASS_rabbit__useSslProtocol=false
 
 # --- MSF API host (override panel's host= field) ---
 DASS_host=http://localhost:7189/
