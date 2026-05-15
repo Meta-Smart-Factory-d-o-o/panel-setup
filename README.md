@@ -1,139 +1,106 @@
-# MSF Panel Setup
+# MSF Panel Setup — One-Command Installer
 
-One-command installer that deploys the **dass-desktop** Docker image to MSF panels.
-
-> The panel application Docker image (`ghcr.io/meta-smart-factory-d-o-o/dass-desktop`) is built and maintained from the [`dass-portal`](https://github.com/Meta-Smart-Factory-d-o-o/dass-portal) repo. This `panel-setup` repo only ships an installer + docker-compose for deploying it on panels.
-
----
-
-## How It Works
-
-1. The `dass-desktop` image already contains a default `system.ini`
-2. Its entrypoint scans for env vars prefixed with `DASS_` and overrides the matching keys in `system.ini` at container start
-   - Naming convention: `DASS_<key with __ instead of .>`
-   - Example: `DASS_mysql__datasource__password=secret` → `mysql.datasource.password=secret`
-3. Cloudflare access tunnels route `localhost:3306` and `localhost:5672` from the panel to the centralized MySQL/RabbitMQ server
-
----
+Installs an MSF panel directly on a host machine (no Docker), with full GUI
+support. Handles Cloudflare tunnels, hardware scripts, `meta.jar` download,
+`system.ini` configuration, and auto-start via supervisord.
 
 ## Quick Start
-
-On a fresh panel (Ubuntu/Debian), run as root:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/Meta-Smart-Factory-d-o-o/panel-setup/main/install.sh | sudo bash -s -- \
   --client norma \
-  --workstation-id 441243 \
-  --panel-id 441243 \
+  --workstation-id 12345 \
+  --panel-id 12345 \
   --mysql-db dass_norma \
-  --mysql-password "yourpass" \
-  --rabbit-password "yourpass" \
-  --ghcr-user farhanawan77 \
-  --ghcr-token "ghp_xxxxxxxxxxxxxxxxxxxx"
+  --mysql-password '<MYSQL_PASS>' \
+  --rabbit-password '<RABBIT_PASS>'
 ```
 
-Or run interactively (will prompt for missing values):
+That's it. The panel:
+- Auto-starts on next boot.
+- Reconnects on crash.
+- GUI shows on the panel's physical display.
 
-```bash
-curl -sSL https://raw.githubusercontent.com/Meta-Smart-Factory-d-o-o/panel-setup/main/install.sh | sudo bash
-```
+## What this installer does
 
-> Generate a GitHub PAT (read:packages scope only) at:
-> https://github.com/settings/tokens/new?scopes=read:packages&description=msf-panel-ghcr
-
----
-
-## What It Does
-
-1. Installs **Docker** (if not present)
-2. Installs **cloudflared** (if not present)
-3. Sets up Cloudflare access tunnels (systemd service `msf-tunnels.service`)
-   - MySQL: `<client>-mysql.msfdemo.com` → `localhost:3306`
-   - RabbitMQ: `<client>-rabbitmq.msfdemo.com` → `localhost:5672`
-4. Creates `/opt/meta-panel/.env` with `DASS_*` override variables
-5. **Installs hardware support scripts on host** (replaces manual `meta.sh`):
-   - Creates `meta` user, adds to `dialout` group
-   - Downloads `udev.sh`, `rfid.sh`, `barcode.sh`, `grant_meta_tty_permissions.sh` to `/opt/meta/`
-   - Installs udev rules and TTY permissions for USB devices (barcode, RFID readers)
-   - Disables USB autosuspend
-6. Logs in to GHCR (image is private)
-7. Pulls `ghcr.io/meta-smart-factory-d-o-o/dass-desktop:latest`
-8. Starts the container
-
----
+1. **Installs OS packages**: `java`, `cloudflared`, `supervisor`, `wget`, `dos2unix`, `jq`
+2. **Sets up Cloudflare tunnels** (systemd service `msf-tunnels`):
+   - `<client>-mysql.msfdemo.com` → `localhost:3306`
+   - `<client>-rabbitmq.msfdemo.com` → `localhost:5672`
+3. **Creates `meta` user** and grants hardware permissions (USB autosuspend, `/dev/tty*`, `dialout` group)
+4. **Downloads `/opt/meta/`** files from the official `nuriozalp/download` distribution:
+   - `meta.jar` (latest release)
+   - `meta.sh`, `udev.sh`, `rfid.sh`, `barcode.sh`, `grant_meta_tty_permissions.sh`
+   - `conf/logback.xml`
+5. **Runs hardware scripts** (`udev`, `rfid`, `barcode`, `grant_meta_tty_permissions`)
+6. **Configures `/opt/meta/conf/system.ini`** with client-specific values
+   (workstation ID, panel ID, MySQL/RabbitMQ creds, JDBC URL, `customerName`)
+7. **Registers `meta.jar` as a supervisord service** (`meta`) — auto-starts on boot
 
 ## Supported Clients
 
 ### Production
 
-| Client | MySQL Tunnel | RabbitMQ Tunnel |
-|--------|-------------|------------------|
-| `norma` | `norma-mysql.msfdemo.com` | `norma-rabbitmq.msfdemo.com` |
-| `simsek` | `simsek-mysql.msfdemo.com` | `simsek-rabbitmq.msfdemo.com` |
-| `mc4` | `mc4-mysql.msfdemo.com` | `mc4-rabbitmq.msfdemo.com` |
+| Client  | MySQL Tunnel                  | RabbitMQ Tunnel                  |
+|---------|-------------------------------|----------------------------------|
+| norma   | `norma-mysql.msfdemo.com`     | `norma-rabbitmq.msfdemo.com`     |
+| simsek  | `simsek-mysql.msfdemo.com`    | `simsek-rabbitmq.msfdemo.com`    |
+| mc4     | `mc4-mysql.msfdemo.com`       | `mc4-rabbitmq.msfdemo.com`       |
 
 ### Test / Internal
 
-| Client | MySQL Tunnel | RabbitMQ Tunnel |
-|--------|-------------|------------------|
-| `msfdemo` | `msfdemo-mysql.msfdemo.com` | `msfdemo-rmq.msfdemo.com` |
+| Client  | MySQL Tunnel                  | RabbitMQ Tunnel              |
+|---------|-------------------------------|------------------------------|
+| msfdemo | `msfdemo-mysql.msfdemo.com`   | `msfdemo-rmq.msfdemo.com`    |
 
-**`msfdemo` is MSF's internal test server — NOT a real customer.** Same Cloudflare-tunnel pattern as production clients. Use for QA, demos, and validating new panel features against MSF's own server before deploying to real customers.
+`msfdemo` is MSF's internal test server. **Not a real customer.** Use for QA, demos, and validating new panel features before deploying to real customers.
 
----
+## Required arguments
 
-## Operations
+| Flag                  | Purpose                            |
+|-----------------------|------------------------------------|
+| `--client`            | One of: `norma`, `simsek`, `mc4`, `msfdemo` |
+| `--workstation-id`    | Unique workstation ID              |
+| `--panel-id`          | Unique panel ID (often same as workstation) |
+| `--mysql-db`          | MySQL database name (e.g. `dass_norma`, `teknia_group`) |
+| `--mysql-password`    | MySQL root password                |
+| `--rabbit-password`   | RabbitMQ password                  |
 
-```bash
-# View logs
-docker compose -f /opt/meta-panel/docker-compose.yml logs -f
+## Optional arguments
 
-# Restart
-docker compose -f /opt/meta-panel/docker-compose.yml restart
+| Flag             | Default                  |
+|------------------|--------------------------|
+| `--mysql-host`   | `localhost` (via tunnel) |
+| `--mysql-port`   | `3306`                   |
+| `--mysql-user`   | `root`                   |
+| `--rabbit-host`  | `localhost` (via tunnel) |
+| `--rabbit-port`  | `5672`                   |
+| `--rabbit-user`  | `dass`                   |
 
-# Stop
-docker compose -f /opt/meta-panel/docker-compose.yml down
+## Managing the panel after install
 
-# Update image to latest
-cd /opt/meta-panel && docker compose pull && docker compose up -d
+| Action          | Command                                              |
+|-----------------|------------------------------------------------------|
+| Status          | `sudo supervisorctl status meta`                     |
+| Restart         | `sudo supervisorctl restart meta`                    |
+| Stop            | `sudo supervisorctl stop meta`                       |
+| Live logs       | `sudo tail -f /var/log/supervisor/meta.out.log`      |
+| Error logs      | `sudo tail -f /var/log/supervisor/meta.err.log`      |
+| Edit config     | `sudo nano /opt/meta/conf/system.ini` then restart   |
+| Tunnel status   | `sudo systemctl status msf-tunnels`                  |
 
-# Update any config value
-nano /opt/meta-panel/.env
-cd /opt/meta-panel && docker compose up -d
-```
+## Why no Docker?
 
----
+The `dass-desktop` Docker image is currently configured for headless mode
+(uses `Xvfb` virtual display), so panel GUI never appears on the real display.
+Until that image supports both modes, this installer runs `meta.jar` directly
+on the host — same as the original `meta.sh` flow — which guarantees the GUI
+appears on the physical panel screen.
 
-## Updating a Value Later
+## Updating the panel
 
-All panel/client settings can be changed by editing `/opt/meta-panel/.env`:
-
-```bash
-sudo nano /opt/meta-panel/.env
-# change DASS_mysql__datasource__password=newpass
-cd /opt/meta-panel && sudo docker compose up -d
-```
-
-The container will restart and pick up the new value automatically.
-
----
-
-## DASS_* Override Reference
-
-Any field in `system.ini` can be overridden using this env var pattern:
-
-| system.ini key | env var |
-|---------------|---------|
-| `mysql.datasource.password` | `DASS_mysql__datasource__password` |
-| `mysql.datasource.username` | `DASS_mysql__datasource__username` |
-| `mysql.datasource.jdbcUrl` | `DASS_mysql__datasource__jdbcUrl` |
-| `rabbit.host` | `DASS_rabbit__host` |
-| `rabbit.password` | `DASS_rabbit__password` |
-| `settings.workstationId` | `DASS_settings__workstationId` |
-| `settings.panelId` | `DASS_settings__panelId` |
-| `customerName` | `DASS_customerName` |
-| `host` | `DASS_host` |
-| `language` | `DASS_language` |
-| `country` | `DASS_country` |
-
-(Any key in `system.ini` works — just replace `.` with `__` and prefix `DASS_`.)
+Re-run the same install command — it will:
+- Pull the latest `meta.jar` from `nuriozalp/download` releases
+- Re-apply hardware scripts
+- Re-configure `system.ini` with any updated args
+- Restart the panel service

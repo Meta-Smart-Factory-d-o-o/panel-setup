@@ -1,24 +1,21 @@
 #!/bin/bash
 # =============================================================================
-# MSF Panel — One-Command Installer (uses dass-desktop image)
+# MSF Panel — One-Command Installer (HOST mode, no Docker)
 #
 # This installer:
-#  1. Installs Docker + cloudflared (if missing)
-#  2. Sets up Cloudflare access tunnels for MySQL + RabbitMQ
-#  3. Creates /opt/meta-panel/.env with DASS_* env vars (override system.ini)
-#  4. Logs in to GHCR (private image)
-#  5. Pulls ghcr.io/meta-smart-factory-d-o-o/dass-desktop:latest
-#  6. Starts the container
+#  1. Installs Cloudflare access tunnels for MySQL + RabbitMQ (no Docker needed)
+#  2. Downloads meta.jar + all helper scripts (meta.sh, udev.sh, rfid.sh,
+#     barcode.sh, grant_meta_tty_permissions.sh, logback.xml) to /opt/meta/
+#  3. Configures /opt/meta/conf/system.ini with client-specific values
+#  4. Sets up the 'meta' user, hardware permissions, USB autosuspend
+#  5. Installs supervisord and registers meta.jar as an auto-start service
 #
-# Override pattern (handled by dass-desktop entrypoint):
-#   DASS_<key with __ instead of .>=value  →  <key>=value in system.ini
-#   Example: DASS_mysql__datasource__password=secret
-#            → mysql.datasource.password=secret
+# Result: Panel GUI starts on real display (DISPLAY=:0) like the old meta.sh
+# flow — no Docker container, no Xvfb virtual display.
 # =============================================================================
 
 set -e
 
-# Suppress interactive prompts during apt-get (e.g. GRUB reconfigure dialog)
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
 
@@ -27,26 +24,18 @@ CLIENT=""
 WORKSTATION_ID=""
 PANEL_ID=""
 
-# --- MySQL (can be updated later via .env) ---
+# --- MySQL ---
 MYSQL_HOST=""
 MYSQL_PORT="3306"
 MYSQL_DB=""
 MYSQL_USER="root"
 MYSQL_PASSWORD=""
 
-# --- RabbitMQ (defaults work for most clients) ---
+# --- RabbitMQ ---
 RABBIT_HOST=""
 RABBIT_PORT="5672"
 RABBIT_USER="dass"
 RABBIT_PASSWORD=""
-
-# --- GHCR (image is private) ---
-GHCR_USER=""
-GHCR_TOKEN=""
-
-REPO_OWNER="meta-smart-factory-d-o-o"
-REPO_NAME="panel-setup"
-RAW_BASE="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main"
 
 # --- Parse args ---
 while [[ "$#" -gt 0 ]]; do
@@ -63,33 +52,31 @@ while [[ "$#" -gt 0 ]]; do
     --rabbit-port) RABBIT_PORT="$2"; shift ;;
     --rabbit-user) RABBIT_USER="$2"; shift ;;
     --rabbit-password) RABBIT_PASSWORD="$2"; shift ;;
-    --ghcr-user) GHCR_USER="$2"; shift ;;
-    --ghcr-token) GHCR_TOKEN="$2"; shift ;;
     -h|--help)
       cat << EOF
-MSF Panel Installer
+MSF Panel Installer (HOST mode — runs meta.jar directly, no Docker)
 
 Required:
   --client <name>           Client name (norma|simsek|mc4|msfdemo)
-                            'msfdemo' = MSF internal test server (uses Cloudflare tunnel like others)
+                            'msfdemo' = MSF internal test server
   --workstation-id <id>     Unique workstation ID
   --panel-id <id>           Unique panel ID
   --mysql-db <name>         MySQL database name
   --mysql-password <pwd>    MySQL password
   --rabbit-password <pwd>   RabbitMQ password
-  --ghcr-user <user>        GitHub username
-  --ghcr-token <token>      GitHub Personal Access Token (read:packages scope)
 
 Optional:
-  --mysql-host <host>       Default: localhost (Cloudflare tunnel)
+  --mysql-host <host>       Default: localhost (via Cloudflare tunnel)
   --mysql-port <port>       Default: 3306
   --mysql-user <user>       Default: root
-  --rabbit-host <host>      Default: localhost (Cloudflare tunnel)
+  --rabbit-host <host>      Default: localhost (via Cloudflare tunnel)
   --rabbit-port <port>      Default: 5672
   --rabbit-user <user>      Default: dass
 
-All values can be updated later by editing /opt/meta-panel/.env then:
-  cd /opt/meta-panel && docker compose up -d
+After install, the panel auto-starts on next boot.
+Manage with:  sudo supervisorctl status meta
+              sudo supervisorctl restart meta
+              sudo supervisorctl tail -f meta
 EOF
       exit 0
       ;;
@@ -98,8 +85,8 @@ EOF
   shift
 done
 
-# --- Interactive prompts for missing required values ---
-[ -z "$CLIENT" ]          && read -p "Client (norma/simsek/mc4): " CLIENT
+# --- Interactive prompts for missing values ---
+[ -z "$CLIENT" ]          && read -p "Client (norma/simsek/mc4/msfdemo): " CLIENT
 [ -z "$WORKSTATION_ID" ]  && read -p "Workstation ID: " WORKSTATION_ID
 if [ -z "$PANEL_ID" ]; then
   read -p "Panel ID [$WORKSTATION_ID]: " PANEL_ID
@@ -108,14 +95,8 @@ fi
 [ -z "$MYSQL_DB" ]        && read -p "MySQL database name: " MYSQL_DB
 [ -z "$MYSQL_PASSWORD" ]  && { read -sp "MySQL password: " MYSQL_PASSWORD; echo; }
 [ -z "$RABBIT_PASSWORD" ] && { read -sp "RabbitMQ password: " RABBIT_PASSWORD; echo; }
-[ -z "$GHCR_USER" ]       && read -p "GitHub username: " GHCR_USER
-[ -z "$GHCR_TOKEN" ]      && { read -sp "GitHub PAT (read:packages): " GHCR_TOKEN; echo; }
 
 # --- Client → tunnel hostname mapping ---
-# All clients use Cloudflare access tunnels to reach their MySQL/RabbitMQ
-# (forwarded to localhost on the panel). 'msfdemo' is MSF's own test/demo
-# server — same tunnel pattern, used for QA and validating new features.
-USE_TUNNELS="true"
 case "$CLIENT" in
   norma)
     MYSQL_TUNNEL_HOST="norma-mysql.msfdemo.com"
@@ -130,8 +111,6 @@ case "$CLIENT" in
     RABBIT_TUNNEL_HOST="mc4-rabbitmq.msfdemo.com"
     ;;
   msfdemo)
-    # TEST/DEMO — MSF's own server. Same tunnel pattern as production clients.
-    # Do NOT use this for real customer deployments.
     MYSQL_TUNNEL_HOST="msfdemo-mysql.msfdemo.com"
     RABBIT_TUNNEL_HOST="msfdemo-rmq.msfdemo.com"
     echo ""
@@ -139,63 +118,55 @@ case "$CLIENT" in
     echo ""
     ;;
   *)
-    echo "ERROR: Unknown client '$CLIENT'. Supported: norma, simsek, mc4, msfdemo (test)"
+    echo "ERROR: Unknown client '$CLIENT'. Supported: norma, simsek, mc4, msfdemo"
     exit 1
     ;;
 esac
 
-# Default hosts to localhost (tunnels forward to actual server)
 [ -z "$MYSQL_HOST" ]  && MYSQL_HOST="localhost"
 [ -z "$RABBIT_HOST" ] && RABBIT_HOST="localhost"
 
 echo ""
 echo "=========================================="
-echo "  MSF Panel Setup (dass-desktop)"
+echo "  MSF Panel Setup (HOST mode)"
 echo "=========================================="
 echo "  Client:         $CLIENT"
 echo "  Workstation ID: $WORKSTATION_ID"
 echo "  Panel ID:       $PANEL_ID"
 echo "  MySQL DB:       $MYSQL_DB"
-if [ "$USE_TUNNELS" = "true" ]; then
-  echo "  MySQL Tunnel:   $MYSQL_TUNNEL_HOST → localhost:3306"
-  echo "  RabbitMQ Tun.:  $RABBIT_TUNNEL_HOST → localhost:5672"
-else
-  echo "  MySQL Host:     $MYSQL_HOST:$MYSQL_PORT (direct, no tunnel)"
-  echo "  RabbitMQ Host:  $RABBIT_HOST:$RABBIT_PORT (direct, no tunnel)"
-fi
+echo "  MySQL Tunnel:   $MYSQL_TUNNEL_HOST → localhost:3306"
+echo "  RabbitMQ Tun.:  $RABBIT_TUNNEL_HOST → localhost:5672"
 echo "=========================================="
 echo ""
 
-# --- Require root ---
 if [ "$EUID" -ne 0 ]; then
   echo "ERROR: Please run as root (use sudo)"
   exit 1
 fi
 
-# --- Step 1: Install Docker ---
-if ! command -v docker &> /dev/null; then
-  echo "==> Installing Docker..."
-  curl -fsSL https://get.docker.com | sh
+# --- Step 1: Install required packages ---
+echo "==> Installing required packages..."
+apt-get update -qq
+apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
+  curl wget dos2unix jq openjdk-17-jre-headless supervisor 2>&1 | tail -3
+
+# Java with GUI support (not the headless one — we need AWT)
+apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
+  openjdk-17-jre 2>&1 | tail -3
+
+# --- Step 2: Install cloudflared ---
+if ! command -v cloudflared &> /dev/null; then
+  echo "==> Installing cloudflared..."
+  curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -o /tmp/cloudflared.deb
+  dpkg -i /tmp/cloudflared.deb
+  rm /tmp/cloudflared.deb
 else
-  echo "==> Docker already installed."
+  echo "==> cloudflared already installed."
 fi
 
-# --- Step 2: Install cloudflared (only if tunnels are used) ---
-if [ "$USE_TUNNELS" = "true" ]; then
-  if ! command -v cloudflared &> /dev/null; then
-    echo "==> Installing cloudflared..."
-    apt-get update -qq
-    apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" curl
-    curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -o /tmp/cloudflared.deb
-    dpkg -i /tmp/cloudflared.deb
-    rm /tmp/cloudflared.deb
-  else
-    echo "==> cloudflared already installed."
-  fi
-
-  # --- Step 3: Setup Cloudflare tunnels (MySQL + RabbitMQ) ---
-  echo "==> Setting up Cloudflare tunnels..."
-  cat > /etc/systemd/system/msf-tunnels.service << EOF
+# --- Step 3: Setup Cloudflare tunnels ---
+echo "==> Setting up Cloudflare tunnels..."
+cat > /etc/systemd/system/msf-tunnels.service << EOF
 [Unit]
 Description=MSF Cloudflare Access Tunnels for ${CLIENT}
 After=network.target
@@ -211,167 +182,161 @@ User=root
 WantedBy=multi-user.target
 EOF
 
-  systemctl daemon-reload
-  systemctl enable msf-tunnels.service
-  systemctl restart msf-tunnels.service
+systemctl daemon-reload
+systemctl enable msf-tunnels.service
+systemctl restart msf-tunnels.service
 
-  echo "==> Waiting for tunnels to come up..."
-  sleep 5
-else
-  echo "==> Skipping cloudflared setup (client uses direct IP, not tunnel)"
+echo "==> Waiting for tunnels to come up..."
+sleep 5
+
+# --- Step 4: Setup meta user + hardware permissions ---
+echo "==> Setting up meta user + hardware permissions..."
+if ! id -u meta &>/dev/null; then
+  useradd -m -s /bin/bash meta || true
 fi
+usermod -aG dialout meta 2>/dev/null || true
 
-# --- Step 4: Create panel directory and .env ---
-echo "==> Creating panel configuration..."
-PANEL_DIR="/opt/meta-panel"
-mkdir -p $PANEL_DIR
-cd $PANEL_DIR
+echo -1 > /sys/module/usbcore/parameters/autosuspend 2>/dev/null || true
+modprobe usbcore autosuspend=-1 2>/dev/null || true
+chmod 777 /dev/tty* 2>/dev/null || true
 
-# Build JDBC URL (per developer recommendation — simpler with timeouts)
-JDBC_URL="jdbc:mysql://${MYSQL_HOST}:${MYSQL_PORT}/${MYSQL_DB}?useSSL=false&connectTimeout=10000&socketTimeout=10000&autoReconnect=true&allowPublicKeyRetrieval=true"
-
-cat > .env << EOF
-# =========================================================================
-# Panel Configuration
-# Override system.ini values via DASS_* env vars (handled by dass-desktop
-# entrypoint.sh — converts DASS_a__b__c → a.b.c=value in system.ini).
-#
-# To update any value: edit this file then run:
-#   cd /opt/meta-panel && docker compose up -d
-# =========================================================================
-
-# --- Panel-Specific ---
-DASS_settings__workstationId=${WORKSTATION_ID}
-DASS_settings__panelId=${PANEL_ID}
-DASS_customerName=${CLIENT}
-
-# --- MySQL ---
-DASS_mysql__datasource__jdbcUrl=${JDBC_URL}
-DASS_mysql__datasource__username=${MYSQL_USER}
-DASS_mysql__datasource__password=${MYSQL_PASSWORD}
-
-# --- RabbitMQ ---
-DASS_rabbit__host=${RABBIT_HOST}
-DASS_rabbit__port=${RABBIT_PORT}
-DASS_rabbit__username=${RABBIT_USER}
-DASS_rabbit__password=${RABBIT_PASSWORD}
-# Disable SSL for RabbitMQ (default system.ini has this true, but Norma/msfdemo do not use SSL)
-DASS_rabbit__useSslProtocol=false
-
-# --- MSF API host (override panel's host= field) ---
-DASS_host=http://localhost:7189/
-EOF
-
-chmod 600 .env
-
-# --- Step 5: Install hardware support scripts on HOST (not in container) ---
-# These scripts manage USB devices (barcode/RFID readers), udev rules, and
-# TTY permissions. They must run on the host system, not inside Docker.
-echo "==> Installing hardware support scripts on host..."
+# --- Step 5: Download meta.jar + helper scripts ---
 META_HOME="/opt/meta"
 mkdir -p "$META_HOME/conf"
 
-# Create meta user if it doesn't exist (needed by hardware scripts)
-if ! id -u meta &>/dev/null; then
-  echo "==> Creating 'meta' user..."
-  useradd -m -s /bin/bash meta || true
-fi
-
-# Add meta user to dialout (needed for serial/USB device access)
-usermod -aG dialout meta 2>/dev/null || true
-
-# Install dependencies for hardware scripts
-apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" dos2unix jq wget 2>/dev/null || true
-
-# Download hardware scripts + meta.sh + logback.xml from official MSF distribution
-# (same source meta.sh uses — github.com/nuriozalp/download/test/)
+echo "==> Downloading meta.jar + scripts from nuriozalp/download..."
 HARDWARE_SCRIPTS_URL="https://github.com/nuriozalp/download/raw/master/test"
 
-# Scripts to install in /opt/meta/
 for script in meta.sh udev.sh rfid.sh barcode.sh grant_meta_tty_permissions.sh; do
-  echo "  - Downloading $script..."
-  if wget -q -O "$META_HOME/$script.tmp" "$HARDWARE_SCRIPTS_URL/$script"; then
-    mv "$META_HOME/$script.tmp" "$META_HOME/$script"
-    dos2unix "$META_HOME/$script" 2>/dev/null || true
-    chmod +x "$META_HOME/$script"
-  else
-    echo "  WARN: $script not found in remote — skipping"
-    rm -f "$META_HOME/$script.tmp"
-  fi
+  echo "  - $script"
+  wget -q -O "$META_HOME/$script" "$HARDWARE_SCRIPTS_URL/$script" || echo "  WARN: $script not found"
+  [ -f "$META_HOME/$script" ] && dos2unix "$META_HOME/$script" 2>/dev/null && chmod +x "$META_HOME/$script"
 done
 
-# logback.xml goes into /opt/meta/conf/ (matching meta.sh behavior)
-echo "  - Downloading logback.xml..."
-if wget -q -O "$META_HOME/conf/logback.xml.tmp" "$HARDWARE_SCRIPTS_URL/logback.xml"; then
-  mv "$META_HOME/conf/logback.xml.tmp" "$META_HOME/conf/logback.xml"
-  dos2unix "$META_HOME/conf/logback.xml" 2>/dev/null || true
-else
-  echo "  WARN: logback.xml not found — skipping"
-  rm -f "$META_HOME/conf/logback.xml.tmp"
-fi
+echo "  - logback.xml"
+wget -q -O "$META_HOME/conf/logback.xml" "$HARDWARE_SCRIPTS_URL/logback.xml" || true
+[ -f "$META_HOME/conf/logback.xml" ] && dos2unix "$META_HOME/conf/logback.xml" 2>/dev/null
 
-# USB autosuspend settings (required for stable USB device behavior)
-echo -1 > /sys/module/usbcore/parameters/autosuspend 2>/dev/null || true
-modprobe usbcore autosuspend=-1 2>/dev/null || true
-
-# TTY permissions for hardware devices
-chmod 777 /dev/tty* 2>/dev/null || true
-
-# Optional: Download meta.jar to /opt/meta/ as a backup
-# (the running container uses its own bundled JAR; this is for emergency manual run)
-echo "==> Downloading meta.jar backup..."
-LATEST_TAG=$(wget -qO- "https://api.github.com/repos/nuriozalp/download/releases/latest" 2>/dev/null | jq -r '.tag_name' 2>/dev/null || echo "")
+echo "==> Downloading latest meta.jar..."
+LATEST_TAG=$(wget -qO- "https://api.github.com/repos/nuriozalp/download/releases/latest" | jq -r '.tag_name')
 if [ -n "$LATEST_TAG" ] && [ "$LATEST_TAG" != "null" ]; then
-  echo "  - Latest version: $LATEST_TAG"
-  if wget -q -O "$META_HOME/meta.jar.tmp" "https://github.com/nuriozalp/download/releases/download/${LATEST_TAG}/meta.jar"; then
-    mv "$META_HOME/meta.jar.tmp" "$META_HOME/meta.jar"
-    echo "  - meta.jar backup saved to $META_HOME/meta.jar"
-  else
-    echo "  WARN: meta.jar backup download failed — skipping (container has its own)"
-    rm -f "$META_HOME/meta.jar.tmp"
-  fi
+  echo "  - version: $LATEST_TAG"
+  wget -q -O "$META_HOME/meta.jar" "https://github.com/nuriozalp/download/releases/download/${LATEST_TAG}/meta.jar"
+  echo "  - meta.jar saved ($(du -h $META_HOME/meta.jar | cut -f1))"
 else
-  echo "  WARN: could not detect latest release tag — skipping JAR backup"
+  echo "ERROR: could not detect latest meta.jar release tag"
+  exit 1
 fi
 
-# Run hardware setup scripts (these install udev rules, set permissions, etc.)
+# --- Step 6: Run hardware setup scripts ---
 echo "==> Running hardware setup scripts..."
 [ -x "$META_HOME/udev.sh" ]                       && "$META_HOME/udev.sh"                       || true
 [ -x "$META_HOME/rfid.sh" ]                       && "$META_HOME/rfid.sh"                       || true
 [ -x "$META_HOME/barcode.sh" ]                    && "$META_HOME/barcode.sh"                    || true
 [ -x "$META_HOME/grant_meta_tty_permissions.sh" ] && "$META_HOME/grant_meta_tty_permissions.sh" || true
 
-chown -R meta:meta "$META_HOME" 2>/dev/null || true
+# --- Step 7: Configure system.ini with client-specific values ---
+echo "==> Configuring $META_HOME/conf/system.ini..."
+SYSTEM_INI="$META_HOME/conf/system.ini"
 
-# --- Step 6: Download docker-compose.yml ---
-echo "==> Downloading docker-compose.yml..."
-curl -sSL "${RAW_BASE}/docker-compose.yml" -o docker-compose.yml
+# If no system.ini exists yet, download a base from the dass-portal repo
+if [ ! -f "$SYSTEM_INI" ]; then
+  echo "  - downloading base system.ini..."
+  wget -q -O "$SYSTEM_INI" \
+    "https://raw.githubusercontent.com/Meta-Smart-Factory-d-o-o/panel-setup/main/system.ini.default" \
+    2>/dev/null || true
+  # Fallback: create minimal one
+  if [ ! -s "$SYSTEM_INI" ]; then
+    cat > "$SYSTEM_INI" << INI
+#$(date)
+customerName=$CLIENT
+host=http://localhost:7189/
+INI
+  fi
+fi
 
-# --- Step 7: Login to GHCR (image is private) ---
-echo "==> Logging in to GHCR..."
-echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+# Helper: set or replace a key in system.ini
+set_ini() {
+  local k="$1" v="$2"
+  # Escape sed special chars in value (just &, /, \)
+  local v_esc=$(printf '%s' "$v" | sed 's|[\\/&]|\\&|g')
+  if grep -q "^${k}=" "$SYSTEM_INI"; then
+    sed -i "s|^${k}=.*|${k}=${v_esc}|" "$SYSTEM_INI"
+  else
+    echo "${k}=${v}" >> "$SYSTEM_INI"
+  fi
+}
 
-# --- Step 8: Allow Docker to access X display (for GUI) ---
-echo "==> Allowing Docker GUI access..."
-xhost +local:docker 2>/dev/null || true
+JDBC_URL="jdbc:mysql://${MYSQL_HOST}:${MYSQL_PORT}/${MYSQL_DB}?useSSL=false&connectTimeout=10000&socketTimeout=10000&autoReconnect=true&allowPublicKeyRetrieval=true"
 
-# --- Step 9: Pull and start the panel ---
-echo "==> Pulling dass-desktop image..."
-docker compose pull
-echo "==> Starting panel..."
-docker compose up -d
+set_ini "customerName"                   "$CLIENT"
+set_ini "settings.workstationId"         "$WORKSTATION_ID"
+set_ini "settings.panelId"               "$PANEL_ID"
+set_ini "mysql.datasource.jdbcUrl"       "$JDBC_URL"
+set_ini "mysql.datasource.username"      "$MYSQL_USER"
+set_ini "mysql.datasource.password"      "$MYSQL_PASSWORD"
+set_ini "rabbit.host"                    "$RABBIT_HOST"
+set_ini "rabbit.port"                    "$RABBIT_PORT"
+set_ini "rabbit.username"                "$RABBIT_USER"
+set_ini "rabbit.password"                "$RABBIT_PASSWORD"
+# Per developer: rabbit.useSslProtocol must be removed (not 'false', completely gone)
+sed -i '/^rabbit\.useSslProtocol=/d' "$SYSTEM_INI"
+
+chown -R meta:meta "$META_HOME"
+chmod 777 "$META_HOME/meta.jar" 2>/dev/null || true
+
+echo ""
+echo "  --- Final system.ini overrides ---"
+grep -E "workstationId|panelId|customerName|^host=|mysql\.datasource\.(jdbcUrl|username|password)|^rabbit\." "$SYSTEM_INI" | sed 's/password=.*/password=*****/'
+echo ""
+
+# --- Step 8: Setup supervisord service for meta.jar ---
+echo "==> Configuring supervisord to auto-start panel..."
+
+# Detect display: prefer existing meta user's session, fall back to :0
+PANEL_DISPLAY="${DISPLAY:-:0}"
+
+cat > /etc/supervisor/conf.d/meta.conf << EOF
+[program:meta]
+command=/usr/bin/java -Djava.library.path=/usr/lib/jni:lib -jar /opt/meta/meta.jar
+directory=/opt/meta
+user=meta
+environment=DISPLAY="${PANEL_DISPLAY}",HOME="/home/meta",XAUTHORITY="/home/meta/.Xauthority"
+autostart=true
+autorestart=true
+startsecs=10
+stopsignal=TERM
+stopwaitsecs=10
+stdout_logfile=/var/log/supervisor/meta.out.log
+stderr_logfile=/var/log/supervisor/meta.err.log
+stdout_logfile_maxbytes=10MB
+stderr_logfile_maxbytes=10MB
+EOF
+
+systemctl enable supervisor
+systemctl restart supervisor
+
+# Allow Docker/other apps to use the X display
+xhost +local: 2>/dev/null || true
+
+supervisorctl reread
+supervisorctl update
+supervisorctl restart meta 2>/dev/null || supervisorctl start meta
 
 echo ""
 echo "=========================================="
 echo "  Setup Complete!"
 echo "=========================================="
 echo ""
-echo "  Panel directory:    $PANEL_DIR"
-echo "  Hardware scripts:   $META_HOME"
+echo "  Panel auto-starts on boot via supervisord."
 echo ""
-echo "  View logs:          docker compose -f $PANEL_DIR/docker-compose.yml logs -f"
-echo "  Restart:            docker compose -f $PANEL_DIR/docker-compose.yml restart"
-echo "  Stop:               docker compose -f $PANEL_DIR/docker-compose.yml down"
-echo "  Update vars:        nano $PANEL_DIR/.env && docker compose up -d"
-echo "  Re-run hw scripts:  sudo $META_HOME/udev.sh && sudo $META_HOME/rfid.sh"
+echo "  Status:    sudo supervisorctl status meta"
+echo "  Restart:   sudo supervisorctl restart meta"
+echo "  Stop:      sudo supervisorctl stop meta"
+echo "  Logs:      sudo tail -f /var/log/supervisor/meta.out.log"
+echo "  Errors:    sudo tail -f /var/log/supervisor/meta.err.log"
+echo "  Tunnels:   sudo systemctl status msf-tunnels"
+echo "  Config:    sudo nano /opt/meta/conf/system.ini"
+echo ""
+echo "  (After editing system.ini: sudo supervisorctl restart meta)"
 echo ""
