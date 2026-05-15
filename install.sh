@@ -258,9 +258,12 @@ usermod -aG dialout meta 2>/dev/null || true
 # Install dependencies for hardware scripts
 apt-get install -y dos2unix jq wget 2>/dev/null || true
 
-# Download hardware scripts from official MSF distribution
+# Download hardware scripts + meta.sh + logback.xml from official MSF distribution
+# (same source meta.sh uses — github.com/nuriozalp/download/test/)
 HARDWARE_SCRIPTS_URL="https://github.com/nuriozalp/download/raw/master/test"
-for script in udev.sh rfid.sh barcode.sh grant_meta_tty_permissions.sh meta_new_io.sh; do
+
+# Scripts to install in /opt/meta/
+for script in meta.sh udev.sh rfid.sh barcode.sh grant_meta_tty_permissions.sh; do
   echo "  - Downloading $script..."
   if wget -q -O "$META_HOME/$script.tmp" "$HARDWARE_SCRIPTS_URL/$script"; then
     mv "$META_HOME/$script.tmp" "$META_HOME/$script"
@@ -272,12 +275,39 @@ for script in udev.sh rfid.sh barcode.sh grant_meta_tty_permissions.sh meta_new_
   fi
 done
 
+# logback.xml goes into /opt/meta/conf/ (matching meta.sh behavior)
+echo "  - Downloading logback.xml..."
+if wget -q -O "$META_HOME/conf/logback.xml.tmp" "$HARDWARE_SCRIPTS_URL/logback.xml"; then
+  mv "$META_HOME/conf/logback.xml.tmp" "$META_HOME/conf/logback.xml"
+  dos2unix "$META_HOME/conf/logback.xml" 2>/dev/null || true
+else
+  echo "  WARN: logback.xml not found — skipping"
+  rm -f "$META_HOME/conf/logback.xml.tmp"
+fi
+
 # USB autosuspend settings (required for stable USB device behavior)
 echo -1 > /sys/module/usbcore/parameters/autosuspend 2>/dev/null || true
 modprobe usbcore autosuspend=-1 2>/dev/null || true
 
 # TTY permissions for hardware devices
 chmod 777 /dev/tty* 2>/dev/null || true
+
+# Optional: Download meta.jar to /opt/meta/ as a backup
+# (the running container uses its own bundled JAR; this is for emergency manual run)
+echo "==> Downloading meta.jar backup..."
+LATEST_TAG=$(wget -qO- "https://api.github.com/repos/nuriozalp/download/releases/latest" 2>/dev/null | jq -r '.tag_name' 2>/dev/null || echo "")
+if [ -n "$LATEST_TAG" ] && [ "$LATEST_TAG" != "null" ]; then
+  echo "  - Latest version: $LATEST_TAG"
+  if wget -q -O "$META_HOME/meta.jar.tmp" "https://github.com/nuriozalp/download/releases/download/${LATEST_TAG}/meta.jar"; then
+    mv "$META_HOME/meta.jar.tmp" "$META_HOME/meta.jar"
+    echo "  - meta.jar backup saved to $META_HOME/meta.jar"
+  else
+    echo "  WARN: meta.jar backup download failed — skipping (container has its own)"
+    rm -f "$META_HOME/meta.jar.tmp"
+  fi
+else
+  echo "  WARN: could not detect latest release tag — skipping JAR backup"
+fi
 
 # Run hardware setup scripts (these install udev rules, set permissions, etc.)
 echo "==> Running hardware setup scripts..."
