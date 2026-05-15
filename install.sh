@@ -1,17 +1,17 @@
 #!/bin/bash
 # =============================================================================
-# MSF Panel — One-Command Installer (HOST mode, no Docker)
+# MSF Panel — Generic One-Command Installer (HOST mode, no Docker)
 #
-# This installer:
-#  1. Installs Cloudflare access tunnels for MySQL + RabbitMQ (no Docker needed)
-#  2. Downloads meta.jar + all helper scripts (meta.sh, udev.sh, rfid.sh,
-#     barcode.sh, grant_meta_tty_permissions.sh, logback.xml) to /opt/meta/
-#  3. Configures /opt/meta/conf/system.ini with client-specific values
-#  4. Sets up the 'meta' user, hardware permissions, USB autosuspend
-#  5. Installs supervisord and registers meta.jar as an auto-start service
+# Generic by design: no hardcoded client mapping. You pass exactly what each
+# panel needs — tunnel hostnames, IDs, DB/RMQ credentials, API host, customer
+# name — and the installer applies everything to /opt/meta/conf/system.ini.
 #
-# Result: Panel GUI starts on real display (DISPLAY=:0) like the old meta.sh
-# flow — no Docker container, no Xvfb virtual display.
+# What it does:
+#  1. Installs Java + cloudflared + supervisord
+#  2. Sets up Cloudflare access tunnels for MySQL + RabbitMQ (systemd service)
+#  3. Downloads meta.jar + helper scripts from nuriozalp/download
+#  4. Configures /opt/meta/conf/system.ini from CLI flags
+#  5. Registers meta.jar as supervisord auto-start service (GUI on real DISPLAY)
 # =============================================================================
 
 set -e
@@ -19,123 +19,161 @@ set -e
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
 
-# --- Required (panel-specific) ---
-CLIENT=""
+# --- Identity ---
 WORKSTATION_ID=""
 PANEL_ID=""
+CUSTOMER_NAME=""
+
+# --- Tunnels (Cloudflare access — forwarded to localhost on this panel) ---
+MYSQL_TUNNEL_HOST=""
+RABBIT_TUNNEL_HOST=""
 
 # --- MySQL ---
-MYSQL_HOST=""
-MYSQL_PORT="3306"
-MYSQL_DB=""
+MYSQL_JDBC_URL=""
 MYSQL_USER="root"
 MYSQL_PASSWORD=""
 
 # --- RabbitMQ ---
 RABBIT_HOST=""
-RABBIT_PORT="5672"
+RABBIT_PORT=""
 RABBIT_USER="dass"
 RABBIT_PASSWORD=""
+RABBIT_USE_SSL=""   # "true" | "false" — required (validated below)
+
+# --- Extra raw key=value overrides (repeatable: --set k=v --set k2=v2) ---
+EXTRA_OVERRIDES=()
+
+show_help() {
+  cat << EOF
+MSF Panel Installer — Generic (HOST mode)
+
+Required:
+  --workstation-id <id>          Workstation ID (e.g. 441297)
+  --panel-id <id>                Panel ID (often same as workstation)
+  --customer <name>              customerName field (e.g. norma, msfdemo, mc4)
+  --mysql-tunnel <hostname>      Cloudflare hostname for MySQL tunnel
+                                 (e.g. norma-mysql.msfdemo.com)
+  --rabbit-tunnel <hostname>     Cloudflare hostname for RabbitMQ tunnel
+                                 (e.g. norma-rabbitmq.msfdemo.com)
+  --jdbc-url <url>               Full JDBC URL written verbatim to system.ini
+                                 (e.g. jdbc:mysql://localhost:3306/teknia_group?useSSL=false&connectTimeout=10000&socketTimeout=10000&autoReconnect=true)
+  --mysql-password <pwd>         MySQL password
+  --rabbit-host <host>           RabbitMQ host (e.g. localhost)
+  --rabbit-port <port>           RabbitMQ port (e.g. 5672)
+  --rabbit-password <pwd>        RabbitMQ password
+  --rabbit-use-ssl <true|false>  Controls rabbit.useSslProtocol in system.ini:
+                                   true  → write "rabbit.useSslProtocol=true"
+                                   false → remove the line entirely (per developer)
+
+Optional:
+  --mysql-user <user>            Default: root
+  --rabbit-user <user>           Default: dass
+
+Repeatable raw override (any system.ini key):
+  --set key=value                Override any system.ini key directly.
+                                 Use multiple times for multiple overrides.
+                                 Example:
+                                   --set settings.theme=2
+                                   --set settings.wareHouseId=406
+
+Example (msfdemo test) — run directly from GitHub:
+  curl -sSL https://raw.githubusercontent.com/Meta-Smart-Factory-d-o-o/panel-setup/main/install.sh | sudo bash -s -- \\
+    --workstation-id 441297 \\
+    --panel-id 441297 \\
+    --customer msfdemo \\
+    --mysql-tunnel msfdemo-mysql.msfdemo.com \\
+    --rabbit-tunnel msfdemo-rmq.msfdemo.com \\
+    --jdbc-url 'jdbc:mysql://localhost:3306/teknia_group?useSSL=false&connectTimeout=10000&socketTimeout=10000&autoReconnect=true' \\
+    --mysql-password '<MYSQL_PASS>' \\
+    --rabbit-host localhost \\
+    --rabbit-port 5672 \\
+    --rabbit-password 'dass123456' \\
+    --rabbit-use-ssl false
+
+Example (Norma production) — run directly from GitHub:
+  curl -sSL https://raw.githubusercontent.com/Meta-Smart-Factory-d-o-o/panel-setup/main/install.sh | sudo bash -s -- \\
+    --workstation-id 12345 \\
+    --panel-id 12345 \\
+    --customer norma \\
+    --mysql-tunnel norma-mysql.msfdemo.com \\
+    --rabbit-tunnel norma-rabbitmq.msfdemo.com \\
+    --jdbc-url 'jdbc:mysql://localhost:3306/dass_norma?useSSL=false&autoReconnect=true' \\
+    --mysql-password '<MYSQL_PASS>' \\
+    --rabbit-host localhost \\
+    --rabbit-port 5672 \\
+    --rabbit-password '<RABBIT_PASS>' \\
+    --rabbit-use-ssl true
+
+After install:
+  sudo supervisorctl status meta
+  sudo supervisorctl restart meta
+  sudo tail -f /var/log/supervisor/meta.out.log
+  sudo nano /opt/meta/conf/system.ini   # then: sudo supervisorctl restart meta
+EOF
+}
 
 # --- Parse args ---
 while [[ "$#" -gt 0 ]]; do
   case $1 in
-    --client) CLIENT="$2"; shift ;;
     --workstation-id) WORKSTATION_ID="$2"; shift ;;
     --panel-id) PANEL_ID="$2"; shift ;;
-    --mysql-host) MYSQL_HOST="$2"; shift ;;
-    --mysql-port) MYSQL_PORT="$2"; shift ;;
-    --mysql-db) MYSQL_DB="$2"; shift ;;
+    --customer) CUSTOMER_NAME="$2"; shift ;;
+    --mysql-tunnel) MYSQL_TUNNEL_HOST="$2"; shift ;;
+    --rabbit-tunnel) RABBIT_TUNNEL_HOST="$2"; shift ;;
+    --jdbc-url) MYSQL_JDBC_URL="$2"; shift ;;
     --mysql-user) MYSQL_USER="$2"; shift ;;
     --mysql-password) MYSQL_PASSWORD="$2"; shift ;;
     --rabbit-host) RABBIT_HOST="$2"; shift ;;
     --rabbit-port) RABBIT_PORT="$2"; shift ;;
     --rabbit-user) RABBIT_USER="$2"; shift ;;
     --rabbit-password) RABBIT_PASSWORD="$2"; shift ;;
-    -h|--help)
-      cat << EOF
-MSF Panel Installer (HOST mode — runs meta.jar directly, no Docker)
-
-Required:
-  --client <name>           Client name (norma|simsek|mc4|msfdemo)
-                            'msfdemo' = MSF internal test server
-  --workstation-id <id>     Unique workstation ID
-  --panel-id <id>           Unique panel ID
-  --mysql-db <name>         MySQL database name
-  --mysql-password <pwd>    MySQL password
-  --rabbit-password <pwd>   RabbitMQ password
-
-Optional:
-  --mysql-host <host>       Default: localhost (via Cloudflare tunnel)
-  --mysql-port <port>       Default: 3306
-  --mysql-user <user>       Default: root
-  --rabbit-host <host>      Default: localhost (via Cloudflare tunnel)
-  --rabbit-port <port>      Default: 5672
-  --rabbit-user <user>      Default: dass
-
-After install, the panel auto-starts on next boot.
-Manage with:  sudo supervisorctl status meta
-              sudo supervisorctl restart meta
-              sudo supervisorctl tail -f meta
-EOF
-      exit 0
-      ;;
+    --rabbit-use-ssl) RABBIT_USE_SSL="$2"; shift ;;
+    --set) EXTRA_OVERRIDES+=("$2"); shift ;;
+    -h|--help) show_help; exit 0 ;;
     *) echo "Unknown parameter: $1"; echo "Run with --help for usage"; exit 1 ;;
   esac
   shift
 done
 
-# --- Interactive prompts for missing values ---
-[ -z "$CLIENT" ]          && read -p "Client (norma/simsek/mc4/msfdemo): " CLIENT
-[ -z "$WORKSTATION_ID" ]  && read -p "Workstation ID: " WORKSTATION_ID
-if [ -z "$PANEL_ID" ]; then
-  read -p "Panel ID [$WORKSTATION_ID]: " PANEL_ID
-  PANEL_ID=${PANEL_ID:-$WORKSTATION_ID}
+# --- Validate required values ---
+missing=()
+[ -z "$WORKSTATION_ID" ]    && missing+=("--workstation-id")
+[ -z "$PANEL_ID" ]          && missing+=("--panel-id")
+[ -z "$CUSTOMER_NAME" ]     && missing+=("--customer")
+[ -z "$MYSQL_TUNNEL_HOST" ] && missing+=("--mysql-tunnel")
+[ -z "$RABBIT_TUNNEL_HOST" ]&& missing+=("--rabbit-tunnel")
+[ -z "$MYSQL_JDBC_URL" ]    && missing+=("--jdbc-url")
+[ -z "$MYSQL_PASSWORD" ]    && missing+=("--mysql-password")
+[ -z "$RABBIT_PASSWORD" ]   && missing+=("--rabbit-password")
+[ -z "$RABBIT_HOST" ]       && missing+=("--rabbit-host")
+[ -z "$RABBIT_PORT" ]       && missing+=("--rabbit-port")
+[ -z "$RABBIT_USE_SSL" ]    && missing+=("--rabbit-use-ssl")
+
+if [ ${#missing[@]} -gt 0 ]; then
+  echo "ERROR: missing required arguments: ${missing[*]}"
+  echo "Run with --help for usage."
+  exit 1
 fi
-[ -z "$MYSQL_DB" ]        && read -p "MySQL database name: " MYSQL_DB
-[ -z "$MYSQL_PASSWORD" ]  && { read -sp "MySQL password: " MYSQL_PASSWORD; echo; }
-[ -z "$RABBIT_PASSWORD" ] && { read -sp "RabbitMQ password: " RABBIT_PASSWORD; echo; }
 
-# --- Client → tunnel hostname mapping ---
-case "$CLIENT" in
-  norma)
-    MYSQL_TUNNEL_HOST="norma-mysql.msfdemo.com"
-    RABBIT_TUNNEL_HOST="norma-rabbitmq.msfdemo.com"
-    ;;
-  simsek)
-    MYSQL_TUNNEL_HOST="simsek-mysql.msfdemo.com"
-    RABBIT_TUNNEL_HOST="simsek-rabbitmq.msfdemo.com"
-    ;;
-  mc4)
-    MYSQL_TUNNEL_HOST="mc4-mysql.msfdemo.com"
-    RABBIT_TUNNEL_HOST="mc4-rabbitmq.msfdemo.com"
-    ;;
-  msfdemo)
-    MYSQL_TUNNEL_HOST="msfdemo-mysql.msfdemo.com"
-    RABBIT_TUNNEL_HOST="msfdemo-rmq.msfdemo.com"
-    echo ""
-    echo "*** NOTE: 'msfdemo' is MSF's internal test server — not a real customer. ***"
-    echo ""
-    ;;
-  *)
-    echo "ERROR: Unknown client '$CLIENT'. Supported: norma, simsek, mc4, msfdemo"
-    exit 1
-    ;;
-esac
-
-[ -z "$MYSQL_HOST" ]  && MYSQL_HOST="localhost"
-[ -z "$RABBIT_HOST" ] && RABBIT_HOST="localhost"
+# Validate rabbit-use-ssl value
+if [ "$RABBIT_USE_SSL" != "true" ] && [ "$RABBIT_USE_SSL" != "false" ]; then
+  echo "ERROR: --rabbit-use-ssl must be 'true' or 'false' (got: '$RABBIT_USE_SSL')"
+  exit 1
+fi
 
 echo ""
 echo "=========================================="
 echo "  MSF Panel Setup (HOST mode)"
 echo "=========================================="
-echo "  Client:         $CLIENT"
-echo "  Workstation ID: $WORKSTATION_ID"
-echo "  Panel ID:       $PANEL_ID"
-echo "  MySQL DB:       $MYSQL_DB"
-echo "  MySQL Tunnel:   $MYSQL_TUNNEL_HOST → localhost:3306"
-echo "  RabbitMQ Tun.:  $RABBIT_TUNNEL_HOST → localhost:5672"
+echo "  Customer:        $CUSTOMER_NAME"
+echo "  Workstation ID:  $WORKSTATION_ID"
+echo "  Panel ID:        $PANEL_ID"
+echo "  MySQL Tunnel:    $MYSQL_TUNNEL_HOST → localhost:3306"
+echo "  RabbitMQ Tun.:   $RABBIT_TUNNEL_HOST → localhost:$RABBIT_PORT"
+echo "  Rabbit host:     $RABBIT_HOST:$RABBIT_PORT"
+echo "  JDBC URL:        $MYSQL_JDBC_URL"
+echo "  Rabbit SSL:      $RABBIT_USE_SSL"
+[ ${#EXTRA_OVERRIDES[@]} -gt 0 ] && echo "  Extra overrides: ${#EXTRA_OVERRIDES[@]} key(s) via --set"
 echo "=========================================="
 echo ""
 
@@ -148,11 +186,7 @@ fi
 echo "==> Installing required packages..."
 apt-get update -qq
 apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
-  curl wget dos2unix jq openjdk-17-jre-headless supervisor 2>&1 | tail -3
-
-# Java with GUI support (not the headless one — we need AWT)
-apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
-  openjdk-17-jre 2>&1 | tail -3
+  curl wget dos2unix jq openjdk-17-jre supervisor 2>&1 | tail -3
 
 # --- Step 2: Install cloudflared ---
 if ! command -v cloudflared &> /dev/null; then
@@ -168,12 +202,12 @@ fi
 echo "==> Setting up Cloudflare tunnels..."
 cat > /etc/systemd/system/msf-tunnels.service << EOF
 [Unit]
-Description=MSF Cloudflare Access Tunnels for ${CLIENT}
+Description=MSF Cloudflare Access Tunnels (${CUSTOMER_NAME})
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=/bin/sh -c '/usr/local/bin/cloudflared access tcp --hostname ${MYSQL_TUNNEL_HOST} --url localhost:3306 & /usr/local/bin/cloudflared access tcp --hostname ${RABBIT_TUNNEL_HOST} --url localhost:5672 & wait'
+ExecStart=/bin/sh -c '/usr/local/bin/cloudflared access tcp --hostname ${MYSQL_TUNNEL_HOST} --url localhost:3306 & /usr/local/bin/cloudflared access tcp --hostname ${RABBIT_TUNNEL_HOST} --url localhost:${RABBIT_PORT} & wait'
 Restart=always
 RestartSec=5
 User=root
@@ -235,31 +269,23 @@ echo "==> Running hardware setup scripts..."
 [ -x "$META_HOME/barcode.sh" ]                    && "$META_HOME/barcode.sh"                    || true
 [ -x "$META_HOME/grant_meta_tty_permissions.sh" ] && "$META_HOME/grant_meta_tty_permissions.sh" || true
 
-# --- Step 7: Configure system.ini with client-specific values ---
+# --- Step 7: Configure /opt/meta/conf/system.ini ---
 echo "==> Configuring $META_HOME/conf/system.ini..."
 SYSTEM_INI="$META_HOME/conf/system.ini"
 
-# If no system.ini exists yet, download a base from the dass-portal repo
+# If system.ini doesn't exist yet, create a minimal one (meta.jar fills the rest)
 if [ ! -f "$SYSTEM_INI" ]; then
-  echo "  - downloading base system.ini..."
-  wget -q -O "$SYSTEM_INI" \
-    "https://raw.githubusercontent.com/Meta-Smart-Factory-d-o-o/panel-setup/main/system.ini.default" \
-    2>/dev/null || true
-  # Fallback: create minimal one
-  if [ ! -s "$SYSTEM_INI" ]; then
-    cat > "$SYSTEM_INI" << INI
+  cat > "$SYSTEM_INI" << INI
 #$(date)
-customerName=$CLIENT
-host=http://localhost:7189/
+customerName=${CUSTOMER_NAME}
 INI
-  fi
 fi
 
 # Helper: set or replace a key in system.ini
 set_ini() {
   local k="$1" v="$2"
-  # Escape sed special chars in value (just &, /, \)
-  local v_esc=$(printf '%s' "$v" | sed 's|[\\/&]|\\&|g')
+  local v_esc
+  v_esc=$(printf '%s' "$v" | sed 's|[\\/&]|\\&|g')
   if grep -q "^${k}=" "$SYSTEM_INI"; then
     sed -i "s|^${k}=.*|${k}=${v_esc}|" "$SYSTEM_INI"
   else
@@ -267,33 +293,50 @@ set_ini() {
   fi
 }
 
-JDBC_URL="jdbc:mysql://${MYSQL_HOST}:${MYSQL_PORT}/${MYSQL_DB}?useSSL=false&connectTimeout=10000&socketTimeout=10000&autoReconnect=true&allowPublicKeyRetrieval=true"
+# Standard overrides
+set_ini "customerName"              "$CUSTOMER_NAME"
+set_ini "settings.workstationId"    "$WORKSTATION_ID"
+set_ini "settings.panelId"          "$PANEL_ID"
+set_ini "mysql.datasource.jdbcUrl"  "$MYSQL_JDBC_URL"
+set_ini "mysql.datasource.username" "$MYSQL_USER"
+set_ini "mysql.datasource.password" "$MYSQL_PASSWORD"
+set_ini "rabbit.host"               "$RABBIT_HOST"
+set_ini "rabbit.port"               "$RABBIT_PORT"
+set_ini "rabbit.username"           "$RABBIT_USER"
+set_ini "rabbit.password"           "$RABBIT_PASSWORD"
 
-set_ini "customerName"                   "$CLIENT"
-set_ini "settings.workstationId"         "$WORKSTATION_ID"
-set_ini "settings.panelId"               "$PANEL_ID"
-set_ini "mysql.datasource.jdbcUrl"       "$JDBC_URL"
-set_ini "mysql.datasource.username"      "$MYSQL_USER"
-set_ini "mysql.datasource.password"      "$MYSQL_PASSWORD"
-set_ini "rabbit.host"                    "$RABBIT_HOST"
-set_ini "rabbit.port"                    "$RABBIT_PORT"
-set_ini "rabbit.username"                "$RABBIT_USER"
-set_ini "rabbit.password"                "$RABBIT_PASSWORD"
-# Per developer: rabbit.useSslProtocol must be removed (not 'false', completely gone)
-sed -i '/^rabbit\.useSslProtocol=/d' "$SYSTEM_INI"
+# rabbit.useSslProtocol special handling:
+#   true  → write the line
+#   false → remove the line entirely (per developer)
+case "$RABBIT_USE_SSL" in
+  true)  set_ini "rabbit.useSslProtocol" "true" ;;
+  false) sed -i '/^rabbit\.useSslProtocol=/d' "$SYSTEM_INI" ;;
+esac
+
+# Apply any --set key=value extras
+for override in "${EXTRA_OVERRIDES[@]}"; do
+  k="${override%%=*}"
+  v="${override#*=}"
+  if [ -z "$k" ] || [ "$k" = "$override" ]; then
+    echo "  WARN: ignoring malformed --set '$override' (expected key=value)"
+    continue
+  fi
+  echo "  - extra override: $k"
+  set_ini "$k" "$v"
+done
 
 chown -R meta:meta "$META_HOME"
 chmod 777 "$META_HOME/meta.jar" 2>/dev/null || true
 
 echo ""
-echo "  --- Final system.ini overrides ---"
-grep -E "workstationId|panelId|customerName|^host=|mysql\.datasource\.(jdbcUrl|username|password)|^rabbit\." "$SYSTEM_INI" | sed 's/password=.*/password=*****/'
+echo "  --- Final system.ini key overrides ---"
+grep -E "^(customerName|mysql\.datasource\.(jdbcUrl|username|password)|rabbit\.(host|port|username|password|useSslProtocol)|settings\.(workstationId|panelId))=" "$SYSTEM_INI" \
+  | sed 's/password=.*/password=*****/'
 echo ""
 
 # --- Step 8: Setup supervisord service for meta.jar ---
 echo "==> Configuring supervisord to auto-start panel..."
 
-# Detect display: prefer existing meta user's session, fall back to :0
 PANEL_DISPLAY="${DISPLAY:-:0}"
 
 cat > /etc/supervisor/conf.d/meta.conf << EOF
@@ -316,7 +359,6 @@ EOF
 systemctl enable supervisor
 systemctl restart supervisor
 
-# Allow Docker/other apps to use the X display
 xhost +local: 2>/dev/null || true
 
 supervisorctl reread
