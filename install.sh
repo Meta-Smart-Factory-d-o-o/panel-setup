@@ -130,13 +130,12 @@ case "$CLIENT" in
     RABBIT_TUNNEL_HOST="mc4-rabbitmq.msfdemo.com"
     ;;
   msfdemo)
-    # TEST/DEMO ONLY — MSF 209 server, direct IP, no Cloudflare tunnel.
+    # TEST/DEMO ONLY — MSF 209 server. Panel runs ON the same machine as
+    # MySQL/RabbitMQ, so use localhost directly (no Cloudflare tunnel needed).
     # Do NOT use this for production customer deployments.
     USE_TUNNELS="false"
-    [ -z "$MYSQL_HOST" ]  && MYSQL_HOST="209.250.235.243"
-    [ -z "$RABBIT_HOST" ] && RABBIT_HOST="209.250.235.243"
-    MYSQL_TUNNEL_HOST="(direct IP — no tunnel)"
-    RABBIT_TUNNEL_HOST="(direct IP — no tunnel)"
+    MYSQL_TUNNEL_HOST="(localhost — same machine)"
+    RABBIT_TUNNEL_HOST="(localhost — same machine)"
     echo ""
     echo "*** WARNING: 'msfdemo' is MSF's internal test server — not a real customer. ***"
     echo ""
