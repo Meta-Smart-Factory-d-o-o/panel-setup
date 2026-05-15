@@ -239,19 +239,68 @@ EOF
 
 chmod 600 .env
 
-# --- Step 5: Download docker-compose.yml ---
+# --- Step 5: Install hardware support scripts on HOST (not in container) ---
+# These scripts manage USB devices (barcode/RFID readers), udev rules, and
+# TTY permissions. They must run on the host system, not inside Docker.
+echo "==> Installing hardware support scripts on host..."
+META_HOME="/opt/meta"
+mkdir -p "$META_HOME/conf"
+
+# Create meta user if it doesn't exist (needed by hardware scripts)
+if ! id -u meta &>/dev/null; then
+  echo "==> Creating 'meta' user..."
+  useradd -m -s /bin/bash meta || true
+fi
+
+# Add meta user to dialout (needed for serial/USB device access)
+usermod -aG dialout meta 2>/dev/null || true
+
+# Install dependencies for hardware scripts
+apt-get install -y dos2unix jq wget 2>/dev/null || true
+
+# Download hardware scripts from official MSF distribution
+HARDWARE_SCRIPTS_URL="https://github.com/nuriozalp/download/raw/master/test"
+for script in udev.sh rfid.sh barcode.sh grant_meta_tty_permissions.sh meta_new_io.sh; do
+  echo "  - Downloading $script..."
+  if wget -q -O "$META_HOME/$script.tmp" "$HARDWARE_SCRIPTS_URL/$script"; then
+    mv "$META_HOME/$script.tmp" "$META_HOME/$script"
+    dos2unix "$META_HOME/$script" 2>/dev/null || true
+    chmod +x "$META_HOME/$script"
+  else
+    echo "  WARN: $script not found in remote — skipping"
+    rm -f "$META_HOME/$script.tmp"
+  fi
+done
+
+# USB autosuspend settings (required for stable USB device behavior)
+echo -1 > /sys/module/usbcore/parameters/autosuspend 2>/dev/null || true
+modprobe usbcore autosuspend=-1 2>/dev/null || true
+
+# TTY permissions for hardware devices
+chmod 777 /dev/tty* 2>/dev/null || true
+
+# Run hardware setup scripts (these install udev rules, set permissions, etc.)
+echo "==> Running hardware setup scripts..."
+[ -x "$META_HOME/udev.sh" ]                       && "$META_HOME/udev.sh"                       || true
+[ -x "$META_HOME/rfid.sh" ]                       && "$META_HOME/rfid.sh"                       || true
+[ -x "$META_HOME/barcode.sh" ]                    && "$META_HOME/barcode.sh"                    || true
+[ -x "$META_HOME/grant_meta_tty_permissions.sh" ] && "$META_HOME/grant_meta_tty_permissions.sh" || true
+
+chown -R meta:meta "$META_HOME" 2>/dev/null || true
+
+# --- Step 6: Download docker-compose.yml ---
 echo "==> Downloading docker-compose.yml..."
 curl -sSL "${RAW_BASE}/docker-compose.yml" -o docker-compose.yml
 
-# --- Step 6: Login to GHCR (image is private) ---
+# --- Step 7: Login to GHCR (image is private) ---
 echo "==> Logging in to GHCR..."
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 
-# --- Step 7: Allow Docker to access X display (for GUI) ---
+# --- Step 8: Allow Docker to access X display (for GUI) ---
 echo "==> Allowing Docker GUI access..."
 xhost +local:docker 2>/dev/null || true
 
-# --- Step 8: Pull and start the panel ---
+# --- Step 9: Pull and start the panel ---
 echo "==> Pulling dass-desktop image..."
 docker compose pull
 echo "==> Starting panel..."
@@ -262,9 +311,12 @@ echo "=========================================="
 echo "  Setup Complete!"
 echo "=========================================="
 echo ""
-echo "  Panel directory: $PANEL_DIR"
-echo "  View logs:       docker compose -f $PANEL_DIR/docker-compose.yml logs -f"
-echo "  Restart:         docker compose -f $PANEL_DIR/docker-compose.yml restart"
-echo "  Stop:            docker compose -f $PANEL_DIR/docker-compose.yml down"
-echo "  Update vars:     nano $PANEL_DIR/.env && docker compose up -d"
+echo "  Panel directory:    $PANEL_DIR"
+echo "  Hardware scripts:   $META_HOME"
+echo ""
+echo "  View logs:          docker compose -f $PANEL_DIR/docker-compose.yml logs -f"
+echo "  Restart:            docker compose -f $PANEL_DIR/docker-compose.yml restart"
+echo "  Stop:               docker compose -f $PANEL_DIR/docker-compose.yml down"
+echo "  Update vars:        nano $PANEL_DIR/.env && docker compose up -d"
+echo "  Re-run hw scripts:  sudo $META_HOME/udev.sh && sudo $META_HOME/rfid.sh"
 echo ""

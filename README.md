@@ -51,9 +51,14 @@ curl -sSL https://raw.githubusercontent.com/Meta-Smart-Factory-d-o-o/panel-setup
    - MySQL: `<client>-mysql.msfdemo.com` → `localhost:3306`
    - RabbitMQ: `<client>-rabbitmq.msfdemo.com` → `localhost:5672`
 4. Creates `/opt/meta-panel/.env` with `DASS_*` override variables
-5. Logs in to GHCR (image is private)
-6. Pulls `ghcr.io/meta-smart-factory-d-o-o/dass-desktop:latest`
-7. Starts the container
+5. **Installs hardware support scripts on host** (replaces manual `meta.sh`):
+   - Creates `meta` user, adds to `dialout` group
+   - Downloads `udev.sh`, `rfid.sh`, `barcode.sh`, `grant_meta_tty_permissions.sh` to `/opt/meta/`
+   - Installs udev rules and TTY permissions for USB devices (barcode, RFID readers)
+   - Disables USB autosuspend
+6. Logs in to GHCR (image is private)
+7. Pulls `ghcr.io/meta-smart-factory-d-o-o/dass-desktop:latest`
+8. Starts the container
 
 ---
 
