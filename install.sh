@@ -273,13 +273,25 @@ echo "==> Running hardware setup scripts..."
 echo "==> Configuring $META_HOME/conf/system.ini..."
 SYSTEM_INI="$META_HOME/conf/system.ini"
 
-# If system.ini doesn't exist yet, create a minimal one (meta.jar fills the rest)
-if [ ! -f "$SYSTEM_INI" ]; then
-  cat > "$SYSTEM_INI" << INI
-#$(date)
-customerName=${CUSTOMER_NAME}
-INI
+# Backup existing system.ini if present
+if [ -f "$SYSTEM_INI" ]; then
+  cp "$SYSTEM_INI" "${SYSTEM_INI}_backup_$(date +%s)"
 fi
+
+# Always start from the full default template (≈100 keys) so meta.jar has
+# every property it expects. The CLI flags below override only what the
+# operator passed; all other defaults stay intact.
+DEFAULT_INI_URL="https://raw.githubusercontent.com/Meta-Smart-Factory-d-o-o/panel-setup/main/system.ini.default"
+echo "  - downloading full default template..."
+if ! wget -q -O "$SYSTEM_INI.tmp" "$DEFAULT_INI_URL"; then
+  echo "ERROR: failed to download default system.ini template from $DEFAULT_INI_URL"
+  rm -f "$SYSTEM_INI.tmp"
+  exit 1
+fi
+mv "$SYSTEM_INI.tmp" "$SYSTEM_INI"
+
+# Prepend timestamp so file mirrors original meta.sh behaviour
+sed -i "1i #$(date)" "$SYSTEM_INI"
 
 # Helper: set or replace a key in system.ini
 set_ini() {
