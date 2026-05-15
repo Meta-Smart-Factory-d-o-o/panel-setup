@@ -74,11 +74,11 @@ curl -sSL https://raw.githubusercontent.com/Meta-Smart-Factory-d-o-o/panel-setup
 
 ### Test / Internal
 
-| Client | Type | Connection |
-|--------|------|-----------|
-| `msfdemo` | **MSF test server only — NOT a real customer** | Direct IP `209.250.235.243` (no Cloudflare tunnel) |
+| Client | MySQL Tunnel | RabbitMQ Tunnel |
+|--------|-------------|------------------|
+| `msfdemo` | `msfdemo-mysql.msfdemo.com` | `msfdemo-rmq.msfdemo.com` |
 
-Use `msfdemo` for QA, demos, and validating new panel features against MSF's own server before deploying to real customers.
+**`msfdemo` is MSF's internal test server — NOT a real customer.** Same Cloudflare-tunnel pattern as production clients. Use for QA, demos, and validating new panel features against MSF's own server before deploying to real customers.
 
 ---
 

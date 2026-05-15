@@ -67,7 +67,7 @@ MSF Panel Installer
 
 Required:
   --client <name>           Client name (norma|simsek|mc4|msfdemo)
-                            'msfdemo' = MSF 209 test server (direct IP, no tunnel)
+                            'msfdemo' = MSF internal test server (uses Cloudflare tunnel like others)
   --workstation-id <id>     Unique workstation ID
   --panel-id <id>           Unique panel ID
   --mysql-db <name>         MySQL database name
@@ -108,9 +108,9 @@ fi
 [ -z "$GHCR_TOKEN" ]      && { read -sp "GitHub PAT (read:packages): " GHCR_TOKEN; echo; }
 
 # --- Client → tunnel hostname mapping ---
-# Production clients use Cloudflare tunnels to reach their MySQL/RabbitMQ.
-# 'msfdemo' is NOT a real customer — it is MSF's own test/demo server (209.250.235.243)
-# used for QA, demos, and validating new features before rolling out to real clients.
+# All clients use Cloudflare access tunnels to reach their MySQL/RabbitMQ
+# (forwarded to localhost on the panel). 'msfdemo' is MSF's own test/demo
+# server — same tunnel pattern, used for QA and validating new features.
 USE_TUNNELS="true"
 case "$CLIENT" in
   norma)
@@ -126,14 +126,12 @@ case "$CLIENT" in
     RABBIT_TUNNEL_HOST="mc4-rabbitmq.msfdemo.com"
     ;;
   msfdemo)
-    # TEST/DEMO ONLY — MSF 209 server. Panel runs ON the same machine as
-    # MySQL/RabbitMQ, so use localhost directly (no Cloudflare tunnel needed).
-    # Do NOT use this for production customer deployments.
-    USE_TUNNELS="false"
-    MYSQL_TUNNEL_HOST="(localhost — same machine)"
-    RABBIT_TUNNEL_HOST="(localhost — same machine)"
+    # TEST/DEMO — MSF's own server. Same tunnel pattern as production clients.
+    # Do NOT use this for real customer deployments.
+    MYSQL_TUNNEL_HOST="msfdemo-mysql.msfdemo.com"
+    RABBIT_TUNNEL_HOST="msfdemo-rmq.msfdemo.com"
     echo ""
-    echo "*** WARNING: 'msfdemo' is MSF's internal test server — not a real customer. ***"
+    echo "*** NOTE: 'msfdemo' is MSF's internal test server — not a real customer. ***"
     echo ""
     ;;
   *)
