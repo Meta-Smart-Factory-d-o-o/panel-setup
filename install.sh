@@ -112,6 +112,9 @@ fi
 [ -z "$CUSTOMER_NAME" ]   && CUSTOMER_NAME=$CLIENT
 
 # --- Client → tunnel hostname mapping ---
+# Production clients use Cloudflare tunnels to reach their MySQL/RabbitMQ.
+# 'msfdemo' is NOT a real customer — it is MSF's own test/demo server (209.250.235.243)
+# used for QA, demos, and validating new features before rolling out to real clients.
 USE_TUNNELS="true"
 case "$CLIENT" in
   norma)
@@ -127,15 +130,19 @@ case "$CLIENT" in
     RABBIT_TUNNEL_HOST="mc4-rabbitmq.msfdemo.com"
     ;;
   msfdemo)
-    # MSF 209 demo/test server — direct IP access, no Cloudflare tunnel needed
+    # TEST/DEMO ONLY — MSF 209 server, direct IP, no Cloudflare tunnel.
+    # Do NOT use this for production customer deployments.
     USE_TUNNELS="false"
     [ -z "$MYSQL_HOST" ]  && MYSQL_HOST="209.250.235.243"
     [ -z "$RABBIT_HOST" ] && RABBIT_HOST="209.250.235.243"
     MYSQL_TUNNEL_HOST="(direct IP — no tunnel)"
     RABBIT_TUNNEL_HOST="(direct IP — no tunnel)"
+    echo ""
+    echo "*** WARNING: 'msfdemo' is MSF's internal test server — not a real customer. ***"
+    echo ""
     ;;
   *)
-    echo "ERROR: Unknown client '$CLIENT'. Supported: norma, simsek, mc4, msfdemo"
+    echo "ERROR: Unknown client '$CLIENT'. Supported: norma, simsek, mc4, msfdemo (test)"
     exit 1
     ;;
 esac
