@@ -22,7 +22,6 @@ set -e
 CLIENT=""
 WORKSTATION_ID=""
 PANEL_ID=""
-CUSTOMER_NAME=""
 
 # --- MySQL (can be updated later via .env) ---
 MYSQL_HOST=""
@@ -51,7 +50,6 @@ while [[ "$#" -gt 0 ]]; do
     --client) CLIENT="$2"; shift ;;
     --workstation-id) WORKSTATION_ID="$2"; shift ;;
     --panel-id) PANEL_ID="$2"; shift ;;
-    --customer) CUSTOMER_NAME="$2"; shift ;;
     --mysql-host) MYSQL_HOST="$2"; shift ;;
     --mysql-port) MYSQL_PORT="$2"; shift ;;
     --mysql-db) MYSQL_DB="$2"; shift ;;
@@ -79,7 +77,6 @@ Required:
   --ghcr-token <token>      GitHub Personal Access Token (read:packages scope)
 
 Optional:
-  --customer <name>         Default: same as --client
   --mysql-host <host>       Default: localhost (Cloudflare tunnel)
   --mysql-port <port>       Default: 3306
   --mysql-user <user>       Default: root
@@ -109,7 +106,6 @@ fi
 [ -z "$RABBIT_PASSWORD" ] && { read -sp "RabbitMQ password: " RABBIT_PASSWORD; echo; }
 [ -z "$GHCR_USER" ]       && read -p "GitHub username: " GHCR_USER
 [ -z "$GHCR_TOKEN" ]      && { read -sp "GitHub PAT (read:packages): " GHCR_TOKEN; echo; }
-[ -z "$CUSTOMER_NAME" ]   && CUSTOMER_NAME=$CLIENT
 
 # --- Client → tunnel hostname mapping ---
 # Production clients use Cloudflare tunnels to reach their MySQL/RabbitMQ.
@@ -245,7 +241,7 @@ cat > .env << EOF
 # --- Panel-Specific ---
 DASS_settings__workstationId=${WORKSTATION_ID}
 DASS_settings__panelId=${PANEL_ID}
-DASS_customerName=${CUSTOMER_NAME}
+DASS_customerName=${CLIENT}
 
 # --- MySQL ---
 DASS_mysql__datasource__jdbcUrl=${JDBC_URL}
