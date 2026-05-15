@@ -18,6 +18,10 @@
 
 set -e
 
+# Suppress interactive prompts during apt-get (e.g. GRUB reconfigure dialog)
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+
 # --- Required (panel-specific) ---
 CLIENT=""
 WORKSTATION_ID=""
@@ -181,7 +185,7 @@ if [ "$USE_TUNNELS" = "true" ]; then
   if ! command -v cloudflared &> /dev/null; then
     echo "==> Installing cloudflared..."
     apt-get update -qq
-    apt-get install -y curl
+    apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" curl
     curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -o /tmp/cloudflared.deb
     dpkg -i /tmp/cloudflared.deb
     rm /tmp/cloudflared.deb
@@ -277,7 +281,7 @@ fi
 usermod -aG dialout meta 2>/dev/null || true
 
 # Install dependencies for hardware scripts
-apt-get install -y dos2unix jq wget 2>/dev/null || true
+apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" dos2unix jq wget 2>/dev/null || true
 
 # Download hardware scripts + meta.sh + logback.xml from official MSF distribution
 # (same source meta.sh uses — github.com/nuriozalp/download/test/)
