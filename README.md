@@ -83,7 +83,8 @@ Use `--set key=value` (repeatable) to push any extra override:
 
 ## What gets installed
 
-1. **OS packages**: `java`, `cloudflared`, `supervisor`, `wget`, `dos2unix`, `jq`
+1. **OS packages**: `java`, `cloudflared`, `supervisor`, `wget`, `dos2unix`, `jq`, `python3` (+`venv`/`pip`)
+   - **Python venv** `/opt/meta/plc-venv` with PLC client libs: `pycomm3` (Allen-Bradley Logix) + `python-snap7` (Siemens S7)
 2. **Cloudflare tunnels** (systemd service `msf-tunnels`):
    - `--mysql-tunnel <host>` → `localhost:3306`
    - `--rabbit-tunnel <host>` → `localhost:<rabbit-port>`
@@ -95,6 +96,38 @@ Use `--set key=value` (repeatable) to push any extra override:
 5. **Hardware scripts** executed (udev rules, RFID, barcode, TTY permissions)
 6. **`/opt/meta/conf/system.ini`** populated with all flags + any extras from `--set`
 7. **supervisord program `meta`** registered — auto-starts on boot, restarts on crash
+
+## Running PLC integration scripts
+
+The PLC client libs live in the isolated venv at `/opt/meta/plc-venv`, **not** in
+the system Python. Run scripts with that venv's interpreter:
+
+```bash
+/opt/meta/plc-venv/bin/python /opt/meta/your_plc_script.py
+```
+
+Or activate the venv for an interactive session:
+
+```bash
+source /opt/meta/plc-venv/bin/activate
+python your_plc_script.py
+deactivate
+```
+
+In a script's shebang, point at the venv directly:
+
+```python
+#!/opt/meta/plc-venv/bin/python
+from pycomm3 import LogixDriver     # Allen-Bradley / Rockwell Logix
+import snap7                        # Siemens S7
+from snap7.client import Area
+```
+
+Verify the libs are importable:
+
+```bash
+/opt/meta/plc-venv/bin/python -c "import pycomm3, snap7; print('PLC libs OK')"
+```
 
 ## Managing the panel
 

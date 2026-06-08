@@ -84,7 +84,8 @@ echo ""
 echo "==> Installing required packages..."
 apt-get update -qq
 apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
-  curl wget dos2unix jq openjdk-17-jre supervisor 2>&1 | tail -3
+  curl wget dos2unix jq openjdk-17-jre supervisor \
+  python3 python3-venv python3-pip software-properties-common 2>&1 | tail -3
 
 # ─── Step 2: Install cloudflared (only if tunnel requested) ───────────────────
 if [ "$USE_TUNNEL" = true ]; then
@@ -172,6 +173,34 @@ else
   echo "ERROR: could not detect latest meta.jar release tag"
   exit 1
 fi
+
+# ─── Step 5b: Setup Python venv + PLC packages ────────────────────────────────
+echo "==> Setting up Python venv for PLC integration..."
+PLC_VENV="$META_HOME/plc-venv"
+
+if [ ! -d "$PLC_VENV" ]; then
+  python3 -m venv "$PLC_VENV"
+fi
+
+# Install the native snap7 shared library (libsnap7). Modern python-snap7 (>=1.x)
+# bundles it in the wheel, but older releases load it from the system — so we
+# install it from the snap7 PPA to be safe. Non-fatal if the PPA is unavailable.
+if ! ldconfig -p 2>/dev/null | grep -q libsnap7; then
+  echo "==> Installing native libsnap7..."
+  add-apt-repository -y ppa:gijzelaerr/snap7 2>/dev/null || true
+  apt-get update -qq 2>/dev/null || true
+  apt-get install -y libsnap7-1 libsnap7-dev 2>&1 | tail -2 || \
+    echo "  WARN: libsnap7 apt install failed — relying on the wheel-bundled lib"
+fi
+
+# Upgrade pip and install the PLC client libraries used by the integration scripts:
+#   pycomm3       → Allen-Bradley / Rockwell Logix PLCs (LogixDriver)
+#   python-snap7  → Siemens S7 PLCs (snap7 client; ships the native lib in the wheel)
+"$PLC_VENV/bin/pip" install --upgrade pip 2>&1 | tail -1
+"$PLC_VENV/bin/pip" install pycomm3 python-snap7 2>&1 | tail -3
+
+echo "  - venv python: $("$PLC_VENV/bin/python" --version 2>&1)"
+echo "  - installed:   $("$PLC_VENV/bin/pip" list 2>/dev/null | grep -iE 'pycomm3|snap7' | tr '\n' ' ')"
 
 # ─── Step 6: Run hardware setup scripts ───────────────────────────────────────
 echo "==> Running hardware setup scripts..."
