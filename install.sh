@@ -58,6 +58,24 @@ else
   USE_TUNNEL=false
 fi
 
+# ─── Remote-access tools (optional) ────────────────────────────────────────────
+echo ""
+read -rp "  Install RustDesk (remote access)? [y/N]: " INSTALL_RUSTDESK_RAW </dev/tty
+INSTALL_RUSTDESK_RAW="${INSTALL_RUSTDESK_RAW,,}"
+if [[ "$INSTALL_RUSTDESK_RAW" == "y" || "$INSTALL_RUSTDESK_RAW" == "yes" ]]; then
+  INSTALL_RUSTDESK=true
+else
+  INSTALL_RUSTDESK=false
+fi
+
+read -rp "  Install AnyDesk (remote access)? [y/N]: " INSTALL_ANYDESK_RAW </dev/tty
+INSTALL_ANYDESK_RAW="${INSTALL_ANYDESK_RAW,,}"
+if [[ "$INSTALL_ANYDESK_RAW" == "y" || "$INSTALL_ANYDESK_RAW" == "yes" ]]; then
+  INSTALL_ANYDESK=true
+else
+  INSTALL_ANYDESK=false
+fi
+
 echo ""
 echo "=========================================="
 echo "  Configuration summary"
@@ -70,6 +88,8 @@ if [ "$USE_TUNNEL" = true ]; then
 else
   echo "  Tunnel:     none"
 fi
+echo "  RustDesk:   $([ "$INSTALL_RUSTDESK" = true ] && echo "yes" || echo "no")"
+echo "  AnyDesk:    $([ "$INSTALL_ANYDESK" = true ] && echo "yes" || echo "no")"
 echo "=========================================="
 echo ""
 read -rp "  Proceed with installation? [Y/n]: " CONFIRM </dev/tty
@@ -130,6 +150,39 @@ else
   # Disable any previously installed tunnel service if present
   if systemctl is-enabled msf-tunnels.service &>/dev/null 2>&1; then
     systemctl disable --now msf-tunnels.service 2>/dev/null || true
+  fi
+fi
+
+# ─── Step 3b: Install remote-access tools (optional) ──────────────────────────
+if [ "$INSTALL_RUSTDESK" = true ]; then
+  if command -v rustdesk &>/dev/null; then
+    echo "==> RustDesk already installed."
+  else
+    echo "==> Installing RustDesk..."
+    RD_DEB=$(wget -qO- "https://api.github.com/repos/rustdesk/rustdesk/releases/latest" \
+      | jq -r '.assets[].browser_download_url' | grep -E 'x86_64\.deb$' | head -1)
+    if [ -n "$RD_DEB" ]; then
+      wget -q -O /tmp/rustdesk.deb "$RD_DEB"
+      apt-get install -y /tmp/rustdesk.deb 2>&1 | tail -2 || dpkg -i /tmp/rustdesk.deb || true
+      rm -f /tmp/rustdesk.deb
+    else
+      echo "  WARN: could not find a RustDesk x86_64 .deb in the latest release"
+    fi
+  fi
+fi
+
+if [ "$INSTALL_ANYDESK" = true ]; then
+  if command -v anydesk &>/dev/null; then
+    echo "==> AnyDesk already installed."
+  else
+    echo "==> Installing AnyDesk..."
+    install -m 0755 -d /etc/apt/keyrings
+    wget -qO- https://keys.anydesk.com/repos/DEB-GPG-KEY \
+      | gpg --dearmor -o /etc/apt/keyrings/anydesk.gpg 2>/dev/null || true
+    echo "deb [signed-by=/etc/apt/keyrings/anydesk.gpg] http://deb.anydesk.com/ all main" \
+      > /etc/apt/sources.list.d/anydesk-stable.list
+    apt-get update -qq 2>/dev/null || true
+    apt-get install -y anydesk 2>&1 | tail -2 || echo "  WARN: AnyDesk apt install failed"
   fi
 fi
 

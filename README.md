@@ -88,14 +88,17 @@ Use `--set key=value` (repeatable) to push any extra override:
 2. **Cloudflare tunnels** (systemd service `msf-tunnels`):
    - `--mysql-tunnel <host>` → `localhost:3306`
    - `--rabbit-tunnel <host>` → `localhost:<rabbit-port>`
-3. **`meta` user** + hardware permissions (USB autosuspend, `/dev/tty*`, `dialout`)
-4. **`/opt/meta/`** files from `nuriozalp/download`:
+3. **Remote-access tools** (optional, asked interactively — skipped if already installed):
+   - **RustDesk** — latest `x86_64.deb` from GitHub releases
+   - **AnyDesk** — from the official `deb.anydesk.com` apt repo
+4. **`meta` user** + hardware permissions (USB autosuspend, `/dev/tty*`, `dialout`)
+5. **`/opt/meta/`** files from `nuriozalp/download`:
    - `meta.jar` (latest release)
    - `meta.sh`, `udev.sh`, `rfid.sh`, `barcode.sh`, `grant_meta_tty_permissions.sh`
    - `conf/logback.xml`
-5. **Hardware scripts** executed (udev rules, RFID, barcode, TTY permissions)
-6. **`/opt/meta/conf/system.ini`** populated with all flags + any extras from `--set`
-7. **supervisord program `meta`** registered — auto-starts on boot, restarts on crash
+6. **Hardware scripts** executed (udev rules, RFID, barcode, TTY permissions)
+7. **`/opt/meta/conf/system.ini`** populated with all flags + any extras from `--set`
+8. **supervisord program `meta`** registered — auto-starts on boot, restarts on crash
 
 ## Running PLC integration scripts
 
