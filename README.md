@@ -25,6 +25,7 @@ That's it — no flags. The script prompts you interactively.
 | → RabbitMQ tunnel hostname      | `msfdemo-rmq.msfdemo.com` → `localhost:5672` (only if tunnel = y) |
 | **Install RustDesk?**           | `y` / `N` (skipped if already installed)  |
 | **Install AnyDesk?**            | `y` / `N` (skipped if already installed)  |
+| **Does this panel talk to a PLC?** | `y` / `N` — if `y`, installs Python + `pycomm3`/`python-snap7` into `/opt/meta/plc-venv` |
 | **Proceed?**                    | confirmation before anything is installed |
 
 It then writes a clean `system.ini` containing just `host` + `settings.panelId`.
@@ -33,8 +34,9 @@ edited afterwards in `/opt/meta/conf/system.ini` (see *Managing the panel*).
 
 ## What gets installed
 
-1. **OS packages**: `java`, `cloudflared`, `supervisor`, `wget`, `dos2unix`, `jq`, `python3` (+`venv`/`pip`)
-   - **Python venv** `/opt/meta/plc-venv` with PLC client libs: `pycomm3` (Allen-Bradley Logix) + `python-snap7` (Siemens S7)
+1. **OS packages**: `java`, `cloudflared`, `supervisor`, `wget`, `dos2unix`, `jq`
+   - **PLC (only if you answer yes):** `python3` (+`venv`/`pip`) and a **Python venv** at
+     `/opt/meta/plc-venv` with `pycomm3` (Allen-Bradley Logix) + `python-snap7` (Siemens S7, incl. native `libsnap7`)
 2. **Cloudflare tunnels** (systemd service `msf-tunnels`):
    - `--mysql-tunnel <host>` → `localhost:3306`
    - `--rabbit-tunnel <host>` → `localhost:<rabbit-port>`

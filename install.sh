@@ -76,6 +76,15 @@ else
   INSTALL_ANYDESK=false
 fi
 
+# ─── PLC integration (optional) ────────────────────────────────────────────────
+read -rp "  Does this panel talk to a PLC? (installs Python + pycomm3/snap7) [y/N]: " INSTALL_PLC_RAW </dev/tty
+INSTALL_PLC_RAW="${INSTALL_PLC_RAW,,}"
+if [[ "$INSTALL_PLC_RAW" == "y" || "$INSTALL_PLC_RAW" == "yes" ]]; then
+  INSTALL_PLC=true
+else
+  INSTALL_PLC=false
+fi
+
 echo ""
 echo "=========================================="
 echo "  Configuration summary"
@@ -90,6 +99,7 @@ else
 fi
 echo "  RustDesk:   $([ "$INSTALL_RUSTDESK" = true ] && echo "yes" || echo "no")"
 echo "  AnyDesk:    $([ "$INSTALL_ANYDESK" = true ] && echo "yes" || echo "no")"
+echo "  PLC (Python): $([ "$INSTALL_PLC" = true ] && echo "yes" || echo "no")"
 echo "=========================================="
 echo ""
 read -rp "  Proceed with installation? [Y/n]: " CONFIRM </dev/tty
@@ -102,10 +112,14 @@ echo ""
 
 # ─── Step 1: Install required packages ────────────────────────────────────────
 echo "==> Installing required packages..."
-apt-get update -qq
+# Tolerate broken/stale third-party apt sources (e.g. a leftover anydesk repo) —
+# a single bad Release file must not abort the whole installer.
+apt-get update -qq || {
+  echo "  WARN: 'apt-get update' reported errors (likely a broken third-party repo)."
+  echo "        Continuing — required packages are pulled from the base Ubuntu repos."
+}
 apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
-  curl wget dos2unix jq openjdk-17-jre supervisor \
-  python3 python3-venv python3-pip software-properties-common 2>&1 | tail -3
+  curl wget dos2unix jq openjdk-17-jre supervisor 2>&1 | tail -3
 
 # ─── Step 2: Install cloudflared (only if tunnel requested) ───────────────────
 if [ "$USE_TUNNEL" = true ]; then
@@ -227,33 +241,41 @@ else
   exit 1
 fi
 
-# ─── Step 5b: Setup Python venv + PLC packages ────────────────────────────────
-echo "==> Setting up Python venv for PLC integration..."
-PLC_VENV="$META_HOME/plc-venv"
+# ─── Step 5b: Setup Python venv + PLC packages (only if panel uses a PLC) ──────
+if [ "$INSTALL_PLC" = true ]; then
+  echo "==> Setting up Python venv for PLC integration..."
+  PLC_VENV="$META_HOME/plc-venv"
 
-if [ ! -d "$PLC_VENV" ]; then
-  python3 -m venv "$PLC_VENV"
+  # Python toolchain (only needed when a PLC is present)
+  apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
+    python3 python3-venv python3-pip software-properties-common 2>&1 | tail -2
+
+  if [ ! -d "$PLC_VENV" ]; then
+    python3 -m venv "$PLC_VENV"
+  fi
+
+  # Install the native snap7 shared library (libsnap7). Modern python-snap7 (>=1.x)
+  # bundles it in the wheel, but older releases load it from the system — so we
+  # install it from the snap7 PPA to be safe. Non-fatal if the PPA is unavailable.
+  if ! ldconfig -p 2>/dev/null | grep -q libsnap7; then
+    echo "==> Installing native libsnap7..."
+    add-apt-repository -y ppa:gijzelaerr/snap7 2>/dev/null || true
+    apt-get update -qq 2>/dev/null || true
+    apt-get install -y libsnap7-1 libsnap7-dev 2>&1 | tail -2 || \
+      echo "  WARN: libsnap7 apt install failed — relying on the wheel-bundled lib"
+  fi
+
+  # Upgrade pip and install the PLC client libraries used by the integration scripts:
+  #   pycomm3       → Allen-Bradley / Rockwell Logix PLCs (LogixDriver)
+  #   python-snap7  → Siemens S7 PLCs (snap7 client; ships the native lib in the wheel)
+  "$PLC_VENV/bin/pip" install --upgrade pip 2>&1 | tail -1
+  "$PLC_VENV/bin/pip" install pycomm3 python-snap7 2>&1 | tail -3
+
+  echo "  - venv python: $("$PLC_VENV/bin/python" --version 2>&1)"
+  echo "  - installed:   $("$PLC_VENV/bin/pip" list 2>/dev/null | grep -iE 'pycomm3|snap7' | tr '\n' ' ')"
+else
+  echo "==> No PLC — skipping Python/PLC package setup."
 fi
-
-# Install the native snap7 shared library (libsnap7). Modern python-snap7 (>=1.x)
-# bundles it in the wheel, but older releases load it from the system — so we
-# install it from the snap7 PPA to be safe. Non-fatal if the PPA is unavailable.
-if ! ldconfig -p 2>/dev/null | grep -q libsnap7; then
-  echo "==> Installing native libsnap7..."
-  add-apt-repository -y ppa:gijzelaerr/snap7 2>/dev/null || true
-  apt-get update -qq 2>/dev/null || true
-  apt-get install -y libsnap7-1 libsnap7-dev 2>&1 | tail -2 || \
-    echo "  WARN: libsnap7 apt install failed — relying on the wheel-bundled lib"
-fi
-
-# Upgrade pip and install the PLC client libraries used by the integration scripts:
-#   pycomm3       → Allen-Bradley / Rockwell Logix PLCs (LogixDriver)
-#   python-snap7  → Siemens S7 PLCs (snap7 client; ships the native lib in the wheel)
-"$PLC_VENV/bin/pip" install --upgrade pip 2>&1 | tail -1
-"$PLC_VENV/bin/pip" install pycomm3 python-snap7 2>&1 | tail -3
-
-echo "  - venv python: $("$PLC_VENV/bin/python" --version 2>&1)"
-echo "  - installed:   $("$PLC_VENV/bin/pip" list 2>/dev/null | grep -iE 'pycomm3|snap7' | tr '\n' ' ')"
 
 # ─── Step 6: Run hardware setup scripts ───────────────────────────────────────
 echo "==> Running hardware setup scripts..."
@@ -313,9 +335,20 @@ systemctl restart supervisor
 
 xhost +local: 2>/dev/null || true
 
-supervisorctl reread
-supervisorctl update
-supervisorctl restart meta 2>/dev/null || supervisorctl start meta
+# Wait for supervisord's control socket to come up before talking to it.
+# Right after 'systemctl restart', supervisorctl can race the daemon and fail
+# with: FileNotFoundError ... supervisor/xmlrpc.py (socket not created yet).
+echo "==> Waiting for supervisord socket..."
+for i in $(seq 1 15); do
+  if supervisorctl status &>/dev/null; then
+    break
+  fi
+  sleep 1
+done
+
+supervisorctl reread || true
+supervisorctl update || true
+supervisorctl restart meta 2>/dev/null || supervisorctl start meta || true
 
 echo ""
 echo "=========================================="
