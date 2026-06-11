@@ -1,85 +1,35 @@
-# MSF Panel Setup — Generic One-Command Installer
+# MSF Panel Setup — Interactive One-Command Installer
 
-Generic installer for MSF panels — no hardcoded client list. You pass exactly
-what each panel needs (tunnel hostnames, IDs, JDBC URL, credentials, customer
-name) and the script applies everything to `/opt/meta/conf/system.ini`, then
+Interactive installer for MSF panels. Run a single command on the panel and it
+asks for everything it needs, then writes `/opt/meta/conf/system.ini` and
 auto-starts the panel via supervisord on the host (real GUI on physical display).
 
-## Norma — production panel
+## How to run
+
+On the panel (must be root):
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/Meta-Smart-Factory-d-o-o/panel-setup/main/install.sh | sudo bash -s -- \
-  --workstation-id 12345 \
-  --panel-id 12345 \
-  --customer norma \
-  --mysql-tunnel norma-mysql.msfdemo.com \
-  --rabbit-tunnel norma-rabbitmq.msfdemo.com \
-  --jdbc-url 'jdbc:mysql://localhost:3306/dass_norma?useSSL=false&autoReconnect=true' \
-  --mysql-password '<MYSQL_PASS>' \
-  --rabbit-host localhost \
-  --rabbit-port 5672 \
-  --rabbit-password '<RABBIT_PASS>' \
-  --rabbit-use-ssl true
+curl -sSL https://raw.githubusercontent.com/Meta-Smart-Factory-d-o-o/panel-setup/main/install.sh | sudo bash
 ```
 
-## msfdemo — MSF test panel
+That's it — no flags. The script prompts you interactively.
 
-Same shape as Norma, just different values:
+## What it asks
 
-```bash
-curl -sSL https://raw.githubusercontent.com/Meta-Smart-Factory-d-o-o/panel-setup/main/install.sh | sudo bash -s -- \
-  --workstation-id 441297 \
-  --panel-id 441297 \
-  --customer msfdemo \
-  --mysql-tunnel msfdemo-mysql.msfdemo.com \
-  --rabbit-tunnel msfdemo-rmq.msfdemo.com \
-  --jdbc-url 'jdbc:mysql://localhost:3306/teknia_group?useSSL=false&connectTimeout=10000&socketTimeout=10000&autoReconnect=true' \
-  --mysql-password '<MYSQL_PASS>' \
-  --rabbit-host localhost \
-  --rabbit-port 5672 \
-  --rabbit-password 'dass123456' \
-  --rabbit-use-ssl false
-```
+| Prompt                          | Example / values                          |
+|---------------------------------|-------------------------------------------|
+| **Panel ID**                    | `206072`                                  |
+| **API host URL**                | `https://msfdemo.com/api/`                |
+| **Use Cloudflare tunnel?**      | `y` / `N`                                 |
+| → MySQL tunnel hostname         | `msfdemo-my.msfdemo.com` → `localhost:3306` (only if tunnel = y) |
+| → RabbitMQ tunnel hostname      | `msfdemo-rmq.msfdemo.com` → `localhost:5672` (only if tunnel = y) |
+| **Install RustDesk?**           | `y` / `N` (skipped if already installed)  |
+| **Install AnyDesk?**            | `y` / `N` (skipped if already installed)  |
+| **Proceed?**                    | confirmation before anything is installed |
 
-## Required flags
-
-| Flag                  | What                                                    |
-|-----------------------|---------------------------------------------------------|
-| `--workstation-id`    | Workstation ID                                          |
-| `--panel-id`          | Panel ID                                                |
-| `--customer`          | `customerName` field (e.g. `norma`, `msfdemo`, `mc4`)   |
-| `--mysql-tunnel`      | Cloudflare hostname for MySQL                           |
-| `--rabbit-tunnel`     | Cloudflare hostname for RabbitMQ                        |
-| `--jdbc-url`          | Full JDBC URL written verbatim into `system.ini`        |
-| `--mysql-password`    | MySQL password                                          |
-| `--rabbit-host`       | RabbitMQ host (e.g. `localhost`)                        |
-| `--rabbit-port`       | RabbitMQ port (e.g. `5672`)                             |
-| `--rabbit-password`   | RabbitMQ password                                       |
-| `--rabbit-use-ssl`    | `true` or `false` (see behaviour below)                 |
-
-## Optional flags
-
-| Flag                | Default      |
-|---------------------|--------------|
-| `--mysql-user`      | `root`       |
-| `--rabbit-user`     | `dass`       |
-
-### `--rabbit-use-ssl` behaviour
-
-| Value   | Effect on `system.ini`                                  |
-|---------|----------------------------------------------------------|
-| `true`  | Writes `rabbit.useSslProtocol=true`                      |
-| `false` | **Removes** the `rabbit.useSslProtocol=` line entirely   |
-
-## Override any other `system.ini` key
-
-Use `--set key=value` (repeatable) to push any extra override:
-
-```bash
-... \
-  --set settings.theme=2 \
-  --set settings.wareHouseId=406
-```
+It then writes a clean `system.ini` containing just `host` + `settings.panelId`.
+Any other `system.ini` keys (JDBC URL, RabbitMQ credentials, theme, etc.) are
+edited afterwards in `/opt/meta/conf/system.ini` (see *Managing the panel*).
 
 ## What gets installed
 
