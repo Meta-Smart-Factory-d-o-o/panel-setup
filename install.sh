@@ -345,7 +345,6 @@ environment=DISPLAY="${PANEL_DISPLAY}",HOME="/home/meta",XAUTHORITY="/home/meta/
 autostart=true
 autorestart=true
 startsecs=10
-startretries=30
 stopsignal=TERM
 stopwaitsecs=10
 stdout_logfile=/var/log/supervisor/meta.out.log
@@ -357,28 +356,7 @@ EOF
 systemctl enable supervisor
 systemctl restart supervisor
 
-# ─── Grant the meta service access to the GUI session's X display ─────────────
-# The panel auto-logs into a GNOME/Wayland session as the 'meta' user. Xwayland
-# guards :0 with a per-session cookie whose filename is randomized every login
-# (e.g. /run/user/1000/.mutter-Xwaylandauth.XXXXXX), so a static XAUTHORITY in
-# the supervisor config can't work across reboots. Instead we grant access via
-# xhost on every login through a GNOME autostart entry — this lets the
-# supervisord-launched meta process (same user) connect to :0 reliably.
-echo "==> Installing X-access autostart entry for the GUI session..."
-AUTOSTART_DIR="/home/meta/.config/autostart"
-mkdir -p "$AUTOSTART_DIR"
-cat > "$AUTOSTART_DIR/meta-xhost.desktop" << 'EOF'
-[Desktop Entry]
-Type=Application
-Name=Grant X access to meta service
-Exec=bash -c "xhost +SI:localuser:meta"
-X-GNOME-Autostart-enabled=true
-NoDisplay=true
-EOF
-chown -R meta:meta /home/meta/.config
-
-# Apply immediately for the current session too (best-effort).
-xhost +SI:localuser:meta 2>/dev/null || xhost +local: 2>/dev/null || true
+xhost +local: 2>/dev/null || true
 
 # Wait for supervisord's control socket to come up before talking to it.
 # Right after 'systemctl restart', supervisorctl can race the daemon and fail
