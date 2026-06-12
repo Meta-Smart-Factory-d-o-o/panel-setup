@@ -26,6 +26,7 @@ That's it — no flags. The script prompts you interactively.
 | **Install RustDesk?**           | `y` / `N` (skipped if already installed)  |
 | **Install AnyDesk?**            | `y` / `N` (skipped if already installed)  |
 | **Does this panel talk to a PLC?** | `y` / `N` — if `y`, installs Python + `pycomm3`/`python-snap7` into `/opt/meta/plc-venv` |
+| **Install Mosquitto MQTT broker?** | `y` / `N` — if `y`, installs `mosquitto` + `mosquitto-clients` and enables the service |
 | **Proceed?**                    | confirmation before anything is installed |
 
 It then writes a clean `system.ini` containing just `host` + `settings.panelId`.

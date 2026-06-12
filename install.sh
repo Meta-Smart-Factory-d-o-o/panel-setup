@@ -85,6 +85,15 @@ else
   INSTALL_PLC=false
 fi
 
+# ─── MQTT broker (optional) ─────────────────────────────────────────────────────
+read -rp "  Install Mosquitto MQTT broker? [y/N]: " INSTALL_MQTT_RAW </dev/tty
+INSTALL_MQTT_RAW="${INSTALL_MQTT_RAW,,}"
+if [[ "$INSTALL_MQTT_RAW" == "y" || "$INSTALL_MQTT_RAW" == "yes" ]]; then
+  INSTALL_MQTT=true
+else
+  INSTALL_MQTT=false
+fi
+
 echo ""
 echo "=========================================="
 echo "  Configuration summary"
@@ -100,6 +109,7 @@ fi
 echo "  RustDesk:   $([ "$INSTALL_RUSTDESK" = true ] && echo "yes" || echo "no")"
 echo "  AnyDesk:    $([ "$INSTALL_ANYDESK" = true ] && echo "yes" || echo "no")"
 echo "  PLC (Python): $([ "$INSTALL_PLC" = true ] && echo "yes" || echo "no")"
+echo "  Mosquitto:  $([ "$INSTALL_MQTT" = true ] && echo "yes" || echo "no")"
 echo "=========================================="
 echo ""
 read -rp "  Proceed with installation? [Y/n]: " CONFIRM </dev/tty
@@ -198,6 +208,19 @@ if [ "$INSTALL_ANYDESK" = true ]; then
     apt-get update -qq 2>/dev/null || true
     apt-get install -y anydesk 2>&1 | tail -2 || echo "  WARN: AnyDesk apt install failed"
   fi
+fi
+
+# ─── Step 3c: Install Mosquitto MQTT broker (optional) ────────────────────────
+if [ "$INSTALL_MQTT" = true ]; then
+  if command -v mosquitto &>/dev/null; then
+    echo "==> Mosquitto already installed."
+  else
+    echo "==> Installing Mosquitto MQTT broker..."
+    apt-get install -y mosquitto mosquitto-clients 2>&1 | tail -2 || \
+      echo "  WARN: Mosquitto apt install failed"
+  fi
+  systemctl enable mosquitto 2>/dev/null || true
+  systemctl restart mosquitto 2>/dev/null || true
 fi
 
 # ─── Step 4: Setup meta user + hardware permissions ───────────────────────────
@@ -322,6 +345,7 @@ environment=DISPLAY="${PANEL_DISPLAY}",HOME="/home/meta",XAUTHORITY="/home/meta/
 autostart=true
 autorestart=true
 startsecs=10
+startretries=30
 stopsignal=TERM
 stopwaitsecs=10
 stdout_logfile=/var/log/supervisor/meta.out.log
@@ -333,7 +357,28 @@ EOF
 systemctl enable supervisor
 systemctl restart supervisor
 
-xhost +local: 2>/dev/null || true
+# ─── Grant the meta service access to the GUI session's X display ─────────────
+# The panel auto-logs into a GNOME/Wayland session as the 'meta' user. Xwayland
+# guards :0 with a per-session cookie whose filename is randomized every login
+# (e.g. /run/user/1000/.mutter-Xwaylandauth.XXXXXX), so a static XAUTHORITY in
+# the supervisor config can't work across reboots. Instead we grant access via
+# xhost on every login through a GNOME autostart entry — this lets the
+# supervisord-launched meta process (same user) connect to :0 reliably.
+echo "==> Installing X-access autostart entry for the GUI session..."
+AUTOSTART_DIR="/home/meta/.config/autostart"
+mkdir -p "$AUTOSTART_DIR"
+cat > "$AUTOSTART_DIR/meta-xhost.desktop" << 'EOF'
+[Desktop Entry]
+Type=Application
+Name=Grant X access to meta service
+Exec=bash -c "xhost +SI:localuser:meta"
+X-GNOME-Autostart-enabled=true
+NoDisplay=true
+EOF
+chown -R meta:meta /home/meta/.config
+
+# Apply immediately for the current session too (best-effort).
+xhost +SI:localuser:meta 2>/dev/null || xhost +local: 2>/dev/null || true
 
 # Wait for supervisord's control socket to come up before talking to it.
 # Right after 'systemctl restart', supervisorctl can race the daemon and fail
