@@ -347,10 +347,10 @@ autorestart=true
 startsecs=10
 stopsignal=TERM
 stopwaitsecs=10
-stdout_logfile=/var/log/supervisor/meta.out.log
-stderr_logfile=/var/log/supervisor/meta.err.log
-stdout_logfile_maxbytes=10MB
-stderr_logfile_maxbytes=10MB
+redirect_stderr=true
+stdout_logfile=/opt/meta/metalog.log
+stdout_logfile_maxbytes=20MB
+stdout_logfile_backups=1
 EOF
 
 systemctl enable supervisor
@@ -383,8 +383,8 @@ echo ""
 echo "  Status:    sudo supervisorctl status meta"
 echo "  Restart:   sudo supervisorctl restart meta"
 echo "  Stop:      sudo supervisorctl stop meta"
-echo "  Logs:      sudo tail -f /var/log/supervisor/meta.out.log"
-echo "  Errors:    sudo tail -f /var/log/supervisor/meta.err.log"
+echo "  Logs:      sudo tail -f /opt/meta/metalog.log"
+echo "  Rolling:   /opt/meta/logs/{info,warn,error}/  (logback.xml)"
 if [ "$USE_TUNNEL" = true ]; then
 echo "  Tunnels:   sudo systemctl status msf-tunnels"
 fi

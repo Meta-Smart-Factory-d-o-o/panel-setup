@@ -92,8 +92,8 @@ Verify the libs are importable:
 | Status          | `sudo supervisorctl status meta`                     |
 | Restart         | `sudo supervisorctl restart meta`                    |
 | Stop            | `sudo supervisorctl stop meta`                       |
-| Live logs       | `sudo tail -f /var/log/supervisor/meta.out.log`      |
-| Error logs      | `sudo tail -f /var/log/supervisor/meta.err.log`      |
+| Live logs       | `sudo tail -f /opt/meta/metalog.log`                 |
+| Rolling logs    | `/opt/meta/logs/{info,warn,error}/…` (via `logback.xml`) |
 | Edit config     | `sudo nano /opt/meta/conf/system.ini` (then restart) |
 | Tunnel status   | `sudo systemctl status msf-tunnels`                  |
 
