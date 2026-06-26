@@ -182,7 +182,7 @@ cat > /etc/fluent-bit/fluent-bit.conf << FBEOF
     Record  panel_id ${PANEL_ID}
     Record  plant_id ${PLANT_ID}
     Record  hostname ${HOSTNAME_TAG}
-    Record  plant_name ${PLANT_NAME}
+    Record  plant_name "${PLANT_NAME}"
     Record  panel_ip ${PANEL_IP}
 
 [FILTER]
