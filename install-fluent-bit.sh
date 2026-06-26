@@ -22,6 +22,7 @@ CUSTOMER=""
 PLANT_ID=""
 HOSTNAME_OVERRIDE=""
 PLANT_NAME=""
+NORMA_REGION=""
 SKIP_INSTALL=false
 
 show_help() {
@@ -39,6 +40,7 @@ Options:
   --opensearch-host <ip>    OpenSearch server (default: 95.179.202.168)
   --opensearch-port <port>  OpenSearch port (default: 9200)
   --log-prefix <prefix>       Index prefix (default: panel-logs-<customer>)
+  --norma-region <us|uk|fr> Norma only: set customer + index per region
   --skip-install            Only rewrite config; do not apt-install Fluent Bit
 
 Examples:
@@ -50,6 +52,11 @@ Examples:
 
   # Simsek panel:
   sudo bash install-fluent-bit.sh --panel-id 12345 --customer simsek --log-prefix panel-logs-simsek
+
+  # Norma US / UK / France (separate OpenSearch indices):
+  sudo bash install-fluent-bit.sh --norma-region us
+  sudo bash install-fluent-bit.sh --norma-region uk
+  sudo bash install-fluent-bit.sh --norma-region fr
 
 After install:
   sudo systemctl status fluent-bit
@@ -67,6 +74,7 @@ while [[ $# -gt 0 ]]; do
     --opensearch-host) OPENSEARCH_HOST="$2"; shift 2 ;;
     --opensearch-port) OPENSEARCH_PORT="$2"; shift 2 ;;
     --log-prefix) LOG_PREFIX="$2"; shift 2 ;;
+    --norma-region) NORMA_REGION="$2"; shift 2 ;;
     --skip-install) SKIP_INSTALL=true; shift ;;
     -h|--help) show_help; exit 0 ;;
     *) echo "Unknown option: $1"; show_help; exit 1 ;;
@@ -88,6 +96,15 @@ fi
 
 [[ -z "$PANEL_ID" ]] && { echo "ERROR: --panel-id required (or settings.panelId in system.ini)"; exit 1; }
 [[ -z "$CUSTOMER" ]] && { echo "ERROR: --customer required (or customerName in system.ini)"; exit 1; }
+
+if [[ -n "$NORMA_REGION" ]]; then
+  case "${NORMA_REGION,,}" in
+    us)   CUSTOMER="normaus"; LOG_PREFIX="panel-logs-normaus" ;;
+    uk)   CUSTOMER="normauk"; LOG_PREFIX="panel-logs-normauk" ;;
+    fr|france) CUSTOMER="normafr"; LOG_PREFIX="panel-logs-normafr" ;;
+    *) echo "ERROR: --norma-region must be us, uk, or fr"; exit 1 ;;
+  esac
+fi
 
 [[ -z "$PLANT_ID" ]] && PLANT_ID="unknown"
 [[ -z "$PLANT_NAME" ]] && PLANT_NAME="MSF Panel"
