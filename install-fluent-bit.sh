@@ -16,6 +16,10 @@ set -euo pipefail
 
 OPENSEARCH_HOST="${OPENSEARCH_HOST:-95.179.202.168}"
 OPENSEARCH_PORT="${OPENSEARCH_PORT:-9200}"
+OPENSEARCH_USER="${OPENSEARCH_USER:-fluentbit}"
+OPENSEARCH_PASSWORD="${OPENSEARCH_PASSWORD:-}"
+OPENSEARCH_TLS="${OPENSEARCH_TLS:-On}"
+CREDENTIALS_FILE="${CREDENTIALS_FILE:-/etc/fluent-bit/opensearch-credentials}"
 LOG_PREFIX="${LOG_PREFIX:-}"
 PANEL_ID=""
 CUSTOMER=""
@@ -39,13 +43,26 @@ Options:
   --hostname <name>         Hostname tag (default: hostname -s)
   --opensearch-host <ip>    OpenSearch server (default: 95.179.202.168)
   --opensearch-port <port>  OpenSearch port (default: 9200)
+  --opensearch-user <user>  OpenSearch auth user (default: fluentbit)
+  --opensearch-password <p> OpenSearch password (required — not stored in this script)
+  --credentials-file <path> Read OPENSEARCH_USER/PASSWORD from file (default:
+                            /etc/fluent-bit/opensearch-credentials, chmod 600)
   --log-prefix <prefix>       Index prefix (default: panel-logs-<customer>)
   --norma-region <us|uk|fr> Norma only: set customer + index per region
   --skip-install            Only rewrite config; do not apt-install Fluent Bit
 
 Examples:
-  # Auto-read from system.ini:
-  sudo bash install-fluent-bit.sh
+  # Existing panel — update config only (password via env or credentials file):
+  sudo OPENSEARCH_PASSWORD='***' bash install-fluent-bit.sh --skip-install
+
+  # Or one-time credentials file on panel (recommended):
+  sudo mkdir -p /etc/fluent-bit
+  sudo tee /etc/fluent-bit/opensearch-credentials << 'EOF'
+OPENSEARCH_USER=fluentbit
+OPENSEARCH_PASSWORD=your-password-from-msf-team
+EOF
+  sudo chmod 600 /etc/fluent-bit/opensearch-credentials
+  sudo bash install-fluent-bit.sh --skip-install
 
   # Explicit:
   sudo bash install-fluent-bit.sh --panel-id 441297 --customer msfdemo
@@ -73,6 +90,9 @@ while [[ $# -gt 0 ]]; do
     --hostname) HOSTNAME_OVERRIDE="$2"; shift 2 ;;
     --opensearch-host) OPENSEARCH_HOST="$2"; shift 2 ;;
     --opensearch-port) OPENSEARCH_PORT="$2"; shift 2 ;;
+    --opensearch-user) OPENSEARCH_USER="$2"; shift 2 ;;
+    --opensearch-password) OPENSEARCH_PASSWORD="$2"; shift 2 ;;
+    --credentials-file) CREDENTIALS_FILE="$2"; shift 2 ;;
     --log-prefix) LOG_PREFIX="$2"; shift 2 ;;
     --norma-region) NORMA_REGION="$2"; shift 2 ;;
     --skip-install) SKIP_INSTALL=true; shift ;;
@@ -112,6 +132,20 @@ HOSTNAME_TAG="${HOSTNAME_OVERRIDE:-$(hostname -s 2>/dev/null || hostname)}"
 PANEL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 [[ -z "$PANEL_IP" ]] && PANEL_IP="unknown"
 [[ -z "$LOG_PREFIX" ]] && LOG_PREFIX="panel-logs-${CUSTOMER}"
+
+# Load password from local credentials file (never commit this file)
+if [[ -f "$CREDENTIALS_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$CREDENTIALS_FILE"
+fi
+
+if [[ -z "$OPENSEARCH_PASSWORD" ]]; then
+  echo "ERROR: OpenSearch password required."
+  echo "  Use --opensearch-password, OPENSEARCH_PASSWORD env var, or"
+  echo "  create ${CREDENTIALS_FILE} (chmod 600) with OPENSEARCH_PASSWORD=..."
+  echo "  Password is issued by MSF team — not stored in GitHub."
+  exit 1
+fi
 
 echo "==> MSF Fluent Bit install"
 echo "    panel_id=$PANEL_ID customer=$CUSTOMER hostname=$HOSTNAME_TAG"
@@ -215,9 +249,12 @@ cat > /etc/fluent-bit/fluent-bit.conf << FBEOF
     Match              panel.logs
     Host               ${OPENSEARCH_HOST}
     Port               ${OPENSEARCH_PORT}
+    HTTP_User          ${OPENSEARCH_USER}
+    HTTP_Passwd        ${OPENSEARCH_PASSWORD}
     Index              ${LOG_PREFIX}
     Suppress_Type_Name On
-    tls                Off
+    tls                ${OPENSEARCH_TLS}
+    tls.verify         Off
     Logstash_Format    On
     Logstash_Prefix    ${LOG_PREFIX}
     Logstash_DateFormat %Y.%m.%d
@@ -245,10 +282,10 @@ echo "=========================================="
 echo "  Panel ID  : $PANEL_ID"
 echo "  Customer  : $CUSTOMER"
 echo "  Index     : ${LOG_PREFIX}-YYYY.MM.DD"
-echo "  OpenSearch: http://${OPENSEARCH_HOST}:${OPENSEARCH_PORT}"
+echo "  OpenSearch: https://${OPENSEARCH_HOST}:${OPENSEARCH_PORT}"
 echo ""
 echo "  Verify on server:"
-echo "    curl -s 'http://${OPENSEARCH_HOST}:${OPENSEARCH_PORT}/${LOG_PREFIX}-*/_search' \\"
+echo "    curl -sk -u '${OPENSEARCH_USER}:****' 'https://${OPENSEARCH_HOST}:${OPENSEARCH_PORT}/${LOG_PREFIX}-*/_search' \\"
 echo "      -H 'Content-Type: application/json' \\"
 echo "      -d '{\"size\":1,\"query\":{\"term\":{\"panel_id.keyword\":\"${PANEL_ID}\"}}}'"
 echo ""
