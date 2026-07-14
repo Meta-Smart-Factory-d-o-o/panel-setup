@@ -151,6 +151,28 @@ echo "==> MSF Fluent Bit install"
 echo "    panel_id=$PANEL_ID customer=$CUSTOMER hostname=$HOSTNAME_TAG"
 echo "    opensearch=${OPENSEARCH_HOST}:${OPENSEARCH_PORT} index=${LOG_PREFIX}"
 
+GITHUB_RELEASE_TAG="${GITHUB_RELEASE_TAG:-fluent-bit-v3.2.10}"
+GITHUB_RELEASE_BASE="https://github.com/Meta-Smart-Factory-d-o-o/panel-setup/releases/download/${GITHUB_RELEASE_TAG}"
+
+install_fluent_bit_from_github_release() {
+  local codename="$1"
+  local deb_name="fluent-bit_3.2.10-jammy_amd64.deb"
+  case "$codename" in
+    noble) deb_name="fluent-bit_3.2.10-noble_amd64.deb" ;;
+    jammy|focal) deb_name="fluent-bit_3.2.10-jammy_amd64.deb" ;;
+  esac
+  local url="${GITHUB_RELEASE_BASE}/${deb_name}"
+  local tmp="/tmp/${deb_name}"
+  echo "==> Fallback: GitHub release (${deb_name})"
+  if curl -fsSL --max-time 600 -o "$tmp" "$url"; then
+    dpkg -i "$tmp" || apt-get install -f -y
+    rm -f "$tmp"
+    return 0
+  fi
+  echo "WARN: GitHub release download failed: $url" >&2
+  return 1
+}
+
 install_fluent_bit() {
   if command -v fluent-bit >/dev/null 2>&1 || [[ -x /opt/fluent-bit/bin/fluent-bit ]]; then
     echo "==> Fluent Bit already installed"
@@ -164,19 +186,23 @@ install_fluent_bit() {
   codename=$( . /etc/os-release && echo "${VERSION_CODENAME:-$UBUNTU_CODENAME}" )
   if [[ -n "$codename" ]]; then
     install -d -m 0755 /usr/share/keyrings
-    curl -fsSL https://packages.fluentbit.io/fluentbit.key \
-      | gpg --dearmor -o /usr/share/keyrings/fluentbit-keyring.gpg 2>/dev/null || true
-    if [[ -f /usr/share/keyrings/fluentbit-keyring.gpg ]]; then
+    if curl -fsSL --max-time 120 https://packages.fluentbit.io/fluentbit.key \
+      | gpg --dearmor -o /usr/share/keyrings/fluentbit-keyring.gpg 2>/dev/null \
+      && [[ -f /usr/share/keyrings/fluentbit-keyring.gpg ]]; then
       echo "deb [signed-by=/usr/share/keyrings/fluentbit-keyring.gpg] https://packages.fluentbit.io/ubuntu/${codename} ${codename} main" \
         > /etc/apt/sources.list.d/fluent-bit.list
       apt-get update -qq
       apt-get install -y fluent-bit
       return 0
     fi
+    echo "WARN: packages.fluentbit.io unreachable — trying GitHub release"
+    if install_fluent_bit_from_github_release "$codename"; then
+      return 0
+    fi
   fi
   fi
 
-  echo "==> Fallback: Fluent Bit install script"
+  echo "==> Last resort: upstream Fluent Bit install script (may also fail if repo blocked)"
   curl -fsSL https://raw.githubusercontent.com/fluent/fluent-bit/master/install.sh | sh
 }
 
